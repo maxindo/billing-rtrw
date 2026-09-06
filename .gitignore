@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+settings.json
+
+# SQLite runtime databases
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Runtime sessions and credentials
+auth_info_baileys/
+baileys_auth_info/
+sessions/
+session/
+
+# Logs and temporary files
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+tmp/
+temp/
+.cache/
+
+# Backups
+backup/
+backups/
+*.bak
+*.backup
+
+# Runtime uploads
+public/uploads/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
