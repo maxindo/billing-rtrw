@@ -1,1 +1,11 @@
-MY_WEBHOOK_SECRET=Qris-Statik-key
+# Copy to .env and replace every CHANGE_ME value before production.
+NODE_ENV=production
+
+# Generate with: openssl rand -hex 32
+SETTINGS_MASTER_KEY=CHANGE_ME_64_HEX_CHARS
+
+# Generate with: openssl rand -hex 32
+SESSION_SECRET=CHANGE_ME_64_HEX_CHARS
+
+# Existing static QRIS webhook secret; generate a unique random value.
+MY_WEBHOOK_SECRET=CHANGE_ME_RANDOM_SECRET
