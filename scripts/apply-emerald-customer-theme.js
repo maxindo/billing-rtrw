@@ -5,7 +5,10 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const THEME_LINK = '  <link rel="stylesheet" href="/css/customer-emerald.css?v=1.0.0">';
+const THEME_LINKS = [
+  '  <link rel="stylesheet" href="/css/customer-emerald.css?v=1.0.0">',
+  '  <link rel="stylesheet" href="/css/customer-emerald-legacy.css?v=1.0.0">'
+].join('\n');
 
 const TARGETS = [
   'views/login.ejs',
@@ -29,7 +32,10 @@ function patchView(rel) {
   }
 
   let src = fs.readFileSync(file, 'utf8');
-  if (src.includes('/css/customer-emerald.css')) {
+  const hasCore = src.includes('/css/customer-emerald.css');
+  const hasLegacy = src.includes('/css/customer-emerald-legacy.css');
+
+  if (hasCore && hasLegacy) {
     console.log(`already themed: ${rel}`);
     return { rel, status: 'already' };
   }
@@ -38,9 +44,12 @@ function patchView(rel) {
     throw new Error(`Tidak menemukan </head>: ${rel}`);
   }
 
-  // Theme is deliberately inserted LAST in <head>, after legacy inline CSS,
-  // so visual overrides win without changing business logic or JavaScript hooks.
-  src = src.replace('</head>', `${THEME_LINK}\n</head>`);
+  // Insert theme as the final stylesheets in <head>. This lets the Emerald layer
+  // override old indigo/blue per-page styles while preserving HTML, JS and EJS logic.
+  const missingLinks = [];
+  if (!hasCore) missingLinks.push('  <link rel="stylesheet" href="/css/customer-emerald.css?v=1.0.0">');
+  if (!hasLegacy) missingLinks.push('  <link rel="stylesheet" href="/css/customer-emerald-legacy.css?v=1.0.0">');
+  src = src.replace('</head>', `${missingLinks.join('\n')}\n</head>`);
 
   // Browser/PWA chrome follows the Emerald palette when a theme-color exists.
   src = src.replace(
