@@ -1,6 +1,7 @@
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import fs from 'fs';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } from '@whiskeysockets/baileys';
@@ -20,11 +21,12 @@ const agentSvc = require('./agentService.js');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..');
 
-// Cache Retry Counter untuk Baileys Signal Enkripsi (Mencegah "Waiting for this message" / Pesan tidak terbaca)
-class SimpleRetryCache {
-  constructor(ttlMs = 600000) {
+// Cache Store Berkinerja Tinggi untuk Baileys Signal Keys & Retries (Anti 'Waiting for this message')
+class BaileysCacheStore {
+  constructor(ttlMs = 600000, maxSize = 5000) {
     this.cache = new Map();
     this.ttlMs = ttlMs;
+    this.maxSize = maxSize;
   }
   get(key) {
     const item = this.cache.get(key);
@@ -36,22 +38,108 @@ class SimpleRetryCache {
     return item.val;
   }
   set(key, val) {
+    if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
     this.cache.set(key, { val, time: Date.now() });
   }
   del(key) {
     this.cache.delete(key);
   }
+  flushAll() {
+    this.cache.clear();
+  }
 }
-const msgRetryCounterCache = new SimpleRetryCache();
 
-const sentMessageMap = new Map();
+const msgRetryCounterCache = new BaileysCacheStore(600000);
+const userDevicesCache = new BaileysCacheStore(3600000);
+const placeholderResendCache = new BaileysCacheStore(600000);
+
+// Multi-Layer Message Store (Memory LRU + SQLite Fallback) untuk menangani permintaan retry dari WhatsApp
+class MultiLayerMessageStore {
+  constructor(maxSize = 5000) {
+    this.store = new Map();
+    this.maxSize = maxSize;
+  }
+
+  cache(key, message) {
+    if (!key || !key.id || !message) return;
+    const msgId = String(key.id);
+    const remote = String(key.remoteJid || '');
+    const combinedKey = `${remote}:${msgId}`;
+
+    let protoMsg = message;
+    if (message.message) protoMsg = message.message;
+
+    this.store.set(combinedKey, protoMsg);
+    this.store.set(msgId, protoMsg);
+
+    if (this.store.size > this.maxSize * 2) {
+      const keysToDelete = Array.from(this.store.keys()).slice(0, 500);
+      for (const k of keysToDelete) this.store.delete(k);
+    }
+  }
+
+  async get(key) {
+    if (!key || !key.id) return undefined;
+    const msgId = String(key.id);
+    const remote = String(key.remoteJid || '');
+    const combinedKey = `${remote}:${msgId}`;
+
+    if (this.store.has(combinedKey)) {
+      return this.store.get(combinedKey);
+    }
+    if (this.store.has(msgId)) {
+      return this.store.get(msgId);
+    }
+
+    for (const [k, v] of this.store.entries()) {
+      if (k.endsWith(`:${msgId}`) || k === msgId) {
+        return v;
+      }
+    }
+
+    // Database Fallback dari wa_chat_messages
+    try {
+      const row = db.prepare('SELECT message_text FROM wa_chat_messages WHERE meta_message_id = ? LIMIT 1').get(msgId);
+      if (row && row.message_text) {
+        return { conversation: row.message_text };
+      }
+    } catch (_) {}
+
+    return undefined;
+  }
+}
+
+const messageStore = new MultiLayerMessageStore(5000);
 function cacheSentMessage(key, message) {
-  if (!key || !key.id || !message) return;
-  const storeKey = `${key.remoteJid || ''}:${key.id}`;
-  sentMessageMap.set(storeKey, message);
-  if (sentMessageMap.size > 2000) {
-    const firstKey = sentMessageMap.keys().next().value;
-    sentMessageMap.delete(firstKey);
+  messageStore.cache(key, message);
+}
+
+/**
+ * Membersihkan file session dan pre-key usang jika terjadi Bad MAC desync
+ * tanpa menghapus creds.json (tidak perlu scan QR ulang)
+ */
+export function cleanStaleSessionKeys(authFolder) {
+  try {
+    const folder = authFolder || path.resolve(projectRoot, getSetting('whatsapp_auth_folder', 'auth_info_baileys'));
+    if (!fs.existsSync(folder)) return 0;
+    const files = fs.readdirSync(folder);
+    let cleaned = 0;
+    for (const f of files) {
+      if (f.startsWith('session-') || f.startsWith('pre-key-') || f.startsWith('sender-key-') || f.startsWith('app-state-sync-')) {
+        try {
+          fs.unlinkSync(path.join(folder, f));
+          cleaned++;
+        } catch (_) {}
+      }
+    }
+    logger.info(`[WA Session Auto-Repair] Membersihkan ${cleaned} session/pre-key usang (creds.json tetap dipertahankan).`);
+    return cleaned;
+  } catch (err) {
+    logger.warn(`[WA Session Auto-Repair] Gagal membersihkan session keys: ${err.message}`);
+    return 0;
   }
 }
 
@@ -107,46 +195,105 @@ function checkCommandCooldown(phone) {
   return { allowed: true };
 }
 
+let authLidReverse = new Map();
+
+export function loadAuthLidReverseMap(authFolder) {
+  try {
+    const folder = authFolder || path.resolve(projectRoot, getSetting('whatsapp_auth_folder', 'auth_info_baileys'));
+    if (!fs.existsSync(folder)) return;
+    const files = fs.readdirSync(folder);
+    const next = new Map();
+    for (const f of files) {
+      const forward = /^lid-mapping-(\d+)\.json$/i.exec(f);
+      const reverse = /^lid-mapping-(\d+)_reverse\.json$/i.exec(f);
+      if (!forward && !reverse) continue;
+
+      const raw = fs.readFileSync(path.join(folder, f), 'utf8');
+      let value = null;
+      try {
+        value = JSON.parse(raw);
+      } catch (e) {
+        value = String(raw || '').trim().replace(/^"|"$/g, '');
+      }
+
+      if (forward) {
+        let phoneDigits = forward[1].replace(/\D/g, '');
+        if (phoneDigits.startsWith('0')) phoneDigits = '62' + phoneDigits.slice(1);
+        else if (phoneDigits.startsWith('8')) phoneDigits = '62' + phoneDigits;
+        const lidDigits = String(value || '').replace(/\D/g, '');
+        if (!phoneDigits || !lidDigits) continue;
+        next.set(lidDigits + '@lid', phoneDigits);
+        next.set(lidDigits, phoneDigits);
+        continue;
+      }
+
+      if (reverse) {
+        const lidDigits = String(reverse[1] || '').replace(/\D/g, '');
+        let phoneDigits = String(value || '').replace(/\D/g, '');
+        if (phoneDigits.startsWith('0')) phoneDigits = '62' + phoneDigits.slice(1);
+        else if (phoneDigits.startsWith('8')) phoneDigits = '62' + phoneDigits;
+        if (!phoneDigits || !lidDigits) continue;
+        next.set(lidDigits + '@lid', phoneDigits);
+        next.set(lidDigits, phoneDigits);
+        continue;
+      }
+    }
+    authLidReverse = next;
+    if (authLidReverse.size > 0) {
+      logger.info(`[WA LID Reverse Map] Memuat ${authLidReverse.size} pemetaan LID otomatis dari folder auth.`);
+    }
+  } catch (e) {
+    logger.warn(`[WA LID Reverse Map] Gagal memuat auth lid reverse map: ${e.message}`);
+  }
+}
+
 function getPhoneFromKey(key) {
   if (!key) return null;
   const remoteJid = key.remoteJid || key;
-  if (!remoteJid) return null;
+  if (!remoteJid || typeof remoteJid !== 'string') return null;
 
-  // If remoteJid is @lid, try resolving from lidStore or senderPn
-  if (typeof remoteJid === 'string' && remoteJid.endsWith('@lid')) {
+  // 1. Check senderPn jika ada
+  if (key.senderPn && key.senderPn.endsWith('@s.whatsapp.net')) {
+    let p = key.senderPn.split('@')[0].replace(/\D/g, '');
+    if (p.startsWith('0')) p = '62' + p.slice(1);
+    else if (p.startsWith('8')) p = '62' + p;
+    else if (!p.startsWith('62')) p = '62' + p;
+    return p;
+  }
+
+  // 2. Check jika remoteJid atau senderLid adalah @lid
+  if (remoteJid.endsWith('@lid') || (key.senderLid && key.senderLid.endsWith('@lid'))) {
+    const lidJid = remoteJid.endsWith('@lid') ? remoteJid : key.senderLid;
+    const lidUser = lidJid.split('@')[0];
+
+    // Cek authLidReverse
+    const fromAuth = authLidReverse.get(lidJid) || authLidReverse.get(lidUser);
+    if (fromAuth) return fromAuth;
+
+    // Cek lidStore
     try {
       const lidStore = getDefaultLidStore();
       if (lidStore) {
-        const mapped = lidStore.get(remoteJid) || lidStore.get(remoteJid.split('@')[0]);
+        const mapped = lidStore.get(lidJid) || lidStore.get(lidUser);
         if (mapped) {
           let p = String(mapped).replace(/\D/g, '');
           if (p.startsWith('0')) p = '62' + p.slice(1);
+          else if (p.startsWith('8')) p = '62' + p;
           else if (!p.startsWith('62')) p = '62' + p;
           return p;
         }
       }
     } catch (_) {}
-    if (key.senderPn && key.senderPn.endsWith('@s.whatsapp.net')) {
-      let p = key.senderPn.split('@')[0].replace(/\D/g, '');
-      if (p.startsWith('0')) p = '62' + p.slice(1);
-      else if (!p.startsWith('62')) p = '62' + p;
-      return p;
-    }
   }
 
-  // Extract phone number from JID
+  // 3. Extract phone number dari JID standar
   const [user, host] = remoteJid.split('@');
   if (!user || !host) return null;
 
-  // Remove non-digits
   const phone = user.replace(/\D/g, '');
   if (!phone) return null;
-
-  // Convert 0 to 62
-  if (phone.startsWith('0')) {
-    return '62' + phone.slice(1);
-  }
-
+  if (phone.startsWith('0')) return '62' + phone.slice(1);
+  if (phone.startsWith('8')) return '62' + phone;
   return phone;
 }
 
@@ -1032,33 +1179,21 @@ export async function sendWA(to, text, options = {}) {
     return false;
   }
   try {
-    let digits = to.replace(/\D/g, '');
+    let digits = String(to || '').replace(/\D/g, '');
+    if (!digits) return false;
     if (digits.startsWith('0')) {
       digits = '62' + digits.slice(1);
+    } else if (digits.startsWith('8')) {
+      digits = '62' + digits;
     }
-    let jid = to.includes('@') ? to : `${digits}@s.whatsapp.net`;
-    logger.info(`[WA sendWA] Mengirim ke: ${to} -> JID Awal: ${jid}`);
-    if (jid.endsWith('@s.whatsapp.net')) {
-      try {
-        const waCheck = await currentSock.onWhatsApp(jid);
-        if (waCheck && waCheck.length > 0 && waCheck[0].exists) {
-          jid = waCheck[0].jid || waCheck[0].lid || jid;
-        }
-      } catch (err) {
-        logger.error(`[WA sendWA] Gagal check onWhatsApp untuk ${jid}: ${err.message}`);
-      }
-    }
+    const jid = digits + '@s.whatsapp.net';
+    logger.info(`[WA sendWA] Mengirim ke JID: ${jid}`);
 
-    if (options.simulateTyping !== false) {
-      await simulateHumanTyping(currentSock, jid, finalText);
-    }
-
-    logger.info(`[WA sendWA] Mengeksekusi sendMessage ke JID: ${jid}`);
     const result = await currentSock.sendMessage(jid, { text: finalText });
     if (result && result.key && result.message) {
       cacheSentMessage(result.key, result.message);
     }
-    logger.info(`[WA sendWA] sendMessage selesai! Result JID: ${result?.key?.remoteJid || 'null'}, ID: ${result?.key?.id || 'null'}`);
+    logger.info(`[WA sendWA] sendMessage sukses ke ${jid} (ID: ${result?.key?.id || 'ok'})`);
     return true;
   } catch (e) {
     logger.error('[WA sendWA] Gagal kirim WA:', e.message);
@@ -1101,26 +1236,15 @@ export async function sendWAImage(to, imageBuffer, caption = '', options = {}) {
   }
   try {
     let digits = String(to || '').replace(/\D/g, '');
+    if (!digits) return false;
     if (digits.startsWith('0')) {
       digits = '62' + digits.slice(1);
+    } else if (digits.startsWith('8')) {
+      digits = '62' + digits;
     }
-    let jid = String(to || '').includes('@') ? String(to) : `${digits}@s.whatsapp.net`;
-    if (jid.endsWith('@s.whatsapp.net')) {
-      try {
-        const [waCheck] = await currentSock.onWhatsApp(jid);
-        if (waCheck && waCheck.exists && waCheck.jid) {
-          jid = waCheck.jid;
-        }
-      } catch (err) {
-        logger.debug(`[WA] sendWAImage JID resolution failed for ${jid}: ${err.message}`);
-      }
-    }
+    const jid = digits + '@s.whatsapp.net';
     const img = Buffer.isBuffer(imageBuffer) ? imageBuffer : Buffer.from(imageBuffer || []);
     if (!img.length) return false;
-
-    if (options.simulateTyping !== false) {
-      await simulateHumanTyping(currentSock, jid, finalCaption);
-    }
 
     const result = await currentSock.sendMessage(jid, { image: img, caption: String(finalCaption || '') });
     if (result && result.key && result.message) {
@@ -1168,26 +1292,15 @@ export async function sendWADocument(to, documentBuffer, filename = 'Invoice.pdf
   }
   try {
     let digits = String(to || '').replace(/\D/g, '');
+    if (!digits) return false;
     if (digits.startsWith('0')) {
       digits = '62' + digits.slice(1);
+    } else if (digits.startsWith('8')) {
+      digits = '62' + digits;
     }
-    let jid = String(to || '').includes('@') ? String(to) : `${digits}@s.whatsapp.net`;
-    if (jid.endsWith('@s.whatsapp.net')) {
-      try {
-        const [waCheck] = await currentSock.onWhatsApp(jid);
-        if (waCheck && waCheck.exists && waCheck.jid) {
-          jid = waCheck.jid;
-        }
-      } catch (err) {
-        logger.debug(`[WA] sendWADocument JID resolution failed for ${jid}: ${err.message}`);
-      }
-    }
+    const jid = digits + '@s.whatsapp.net';
     const doc = Buffer.isBuffer(documentBuffer) ? documentBuffer : Buffer.from(documentBuffer || []);
     if (!doc.length) return false;
-
-    if (options.simulateTyping !== false) {
-      await simulateHumanTyping(currentSock, jid, finalCaption);
-    }
 
     const result = await currentSock.sendMessage(jid, {
       document: doc,
@@ -2056,6 +2169,8 @@ export async function startWhatsAppBot() {
     const lidStore = getDefaultLidStore();
 
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+    loadAuthLidReverseMap(authFolder);
+
     let version = [2, 3000, 1043857760]; // Fallback version terbaru
     try {
       const latest = await fetchLatestBaileysVersion();
@@ -2071,30 +2186,82 @@ export async function startWhatsAppBot() {
       auth: state,
       browser: Browsers.ubuntu('Chrome'),
       syncFullHistory: false,
-      markOnlineOnConnect: false,
+      markOnlineOnConnect: true,
       generateHighQualityLinkPreview: false,
       msgRetryCounterCache,
-      getMessage: async (key) => {
-        if (key && key.id) {
-          const storeKey = `${key.remoteJid || ''}:${key.id}`;
-          const cached = sentMessageMap.get(storeKey);
-          if (cached) return cached;
-          const idOnly = key.id;
-          for (const [k, v] of sentMessageMap.entries()) {
-            if (k.endsWith(`:${idOnly}`)) return v;
-          }
-        }
-        return undefined;
-      },
+      userDevicesCache,
+      placeholderResendCache,
+      retryRequestDelayMs: 250,
+      maxMsgRetryCount: 5,
       keepAliveIntervalMs: 30000,
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
+      appStateMacVerification: {
+        patch: false,
+        snapshot: false
+      },
+      patchMessageBeforeSending: (message) => {
+        const requiresPatch = !!(
+          message.buttonsMessage ||
+          message.templateMessage ||
+          message.listMessage
+        );
+        if (requiresPatch) {
+          message = {
+            viewOnceMessage: {
+              message: {
+                messageContextInfo: {
+                  deviceListMetadataVersion: 2,
+                  deviceListMetadata: {},
+                },
+                ...message,
+              },
+            },
+          };
+        }
+        return message;
+      },
+      getMessage: async (key) => {
+        return await messageStore.get(key);
+      },
       logger: pino({ level: 'silent' })
     });
 
     currentSock = sock;
 
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', () => {
+      saveCreds();
+      loadAuthLidReverseMap(authFolder);
+    });
+
+    // Merekam pemetaan nomor HP dari kontak (LID Mapping real-time)
+    sock.ev.on('contacts.upsert', (contacts) => {
+      for (const contact of contacts) {
+        if (contact.id && contact.id.endsWith('@lid') && contact.phoneNumber) {
+          let digits = String(contact.phoneNumber).replace(/\D/g, '');
+          if (digits.startsWith('0')) digits = '62' + digits.slice(1);
+          else if (digits.startsWith('8')) digits = '62' + digits;
+          lidStore.set(contact.id, digits);
+          authLidReverse.set(contact.id, digits);
+          authLidReverse.set(contact.id.split('@')[0], digits);
+        }
+      }
+    });
+
+    sock.ev.on('messaging-history.set', ({ contacts }) => {
+      if (contacts) {
+        for (const contact of contacts) {
+          if (contact.id && contact.id.endsWith('@lid') && contact.phoneNumber) {
+            let digits = String(contact.phoneNumber).replace(/\D/g, '');
+            if (digits.startsWith('0')) digits = '62' + digits.slice(1);
+            else if (digits.startsWith('8')) digits = '62' + digits;
+            lidStore.set(contact.id, digits);
+            authLidReverse.set(contact.id, digits);
+            authLidReverse.set(contact.id.split('@')[0], digits);
+          }
+        }
+      }
+    });
 
     sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
@@ -2125,8 +2292,16 @@ export async function startWhatsAppBot() {
         whatsappStatus.qrImage = null;
         whatsappStatus.user = null;
         const code = lastDisconnect?.error?.output?.statusCode;
+        const errorMsg = lastDisconnect?.error?.message || '';
         const shouldReconnect = code !== DisconnectReason.loggedOut;
         whatsappStatus.connection = code === DisconnectReason.loggedOut ? 'loggedOut' : 'connecting';
+
+        // Auto-repair jika terjadi desinkronisasi sesi/Bad MAC
+        const isBadMac = errorMsg.includes('Bad MAC') || errorMsg.includes('MAC mismatch') || code === 401;
+        if (isBadMac && code !== DisconnectReason.loggedOut) {
+          logger.warn(`[WA Auto-Repair] Terdeteksi desinkronisasi sesi/Bad MAC (${errorMsg}). Membersihkan pre-key usang...`);
+          cleanStaleSessionKeys(authFolder);
+        }
 
         logger.warn(
           `WhatsApp terputus (kode ${code}). ` +
@@ -2135,7 +2310,8 @@ export async function startWhatsAppBot() {
             : 'Mencoba reconnect dalam 3 detik...')
         );
         if (shouldReconnect) {
-          setTimeout(() => startWhatsAppBot(), 3000);
+          const delay = code === DisconnectReason.restartRequired ? 500 : 3000;
+          setTimeout(() => startWhatsAppBot(), delay);
         }
       } else if (connection === 'open') {
         whatsappStatus.qr = null;
@@ -2159,6 +2335,8 @@ export async function startWhatsAppBot() {
                   const lidUser = lidJid.split('@')[0];
                   lidStore.set(lidJid, formatted);
                   lidStore.set(lidUser, formatted);
+                  authLidReverse.set(lidJid, formatted);
+                  authLidReverse.set(lidUser, formatted);
                   logger.info(`[WA Admin Pre-resolve] Nomor admin ${formatted} terpetakan ke LID: ${lidJid}`);
                 }
               }
@@ -2211,22 +2389,23 @@ export async function startWhatsAppBot() {
           const remote = m.key.remoteJid;
           if (!remote || remote.endsWith('@g.us')) continue;
 
+          const phone = getPhoneFromKey(m.key);
+          const targetJid = (phone && phone.length >= 8) ? `${phone}@s.whatsapp.net` : remote;
+
+          // Pengiriman balasan langsung tanpa quote untuk mencegah isu "Menunggu pesan ini"
           const reply = async (msg) => {
-            logger.info(`[WA reply] Menyiapkan balasan ke ${remote}: "${msg.substring(0, 60)}..."`);
+            logger.info(`[WA reply] Menyiapkan balasan ke ${targetJid} (dari ${remote}): "${msg.substring(0, 60)}..."`);
             try {
-              const targetJid = remote;
-              logger.info(`[WA reply] Mengirim balasan ke JID target: ${targetJid}`);
-              const result = await sock.sendMessage(targetJid, { text: waAutoWrap(msg) }, { quoted: m });
+              const result = await sock.sendMessage(targetJid, { text: waAutoWrap(msg) });
               if (result && result.key && result.message) {
                 cacheSentMessage(result.key, result.message);
               }
-              logger.info(`[WA reply] Balasan berhasil dikirim ke JID target: ${targetJid}`);
+              logger.info(`[WA reply] Balasan berhasil dikirim ke JID: ${targetJid}`);
             } catch (sendErr) {
               logger.error('[WA reply] Gagal mengirim balasan: ' + sendErr.message);
             }
           };
 
-          const phone = getPhoneFromKey(m.key);
           await processIncomingCommand({
             senderPhone: phone,
             text: text,

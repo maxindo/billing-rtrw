@@ -1612,9 +1612,12 @@ logger.info(`Attempting to start server on configured port: ${port}`);
 startServer(port);
 
 if (getSetting('whatsapp_enabled', false)) {
-  import('./services/whatsappBot.mjs')
-    .then((mod) => mod.startWhatsAppBot())
-    .catch((err) => logger.error('Gagal memulai WhatsApp bot:', err));
+  const gwType = getSetting('wa_gateway_type', 'baileys');
+  if (gwType === 'baileys') {
+    import('./services/whatsappBot.mjs')
+      .then((mod) => mod.startWhatsAppBot())
+      .catch((err) => logger.error('Gagal memulai WhatsApp bot (Baileys):', err));
+  }
 }
 
 if (getSetting('telegram_enabled', false)) {

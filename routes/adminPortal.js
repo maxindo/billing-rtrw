@@ -6053,10 +6053,7 @@ router.get('/api/whatsapp/status', requireAdmin, async (req, res) => {
 
 router.post('/whatsapp/test-notification', requireAdminSession, async (req, res) => {
   try {
-    const { sendWA, whatsappStatus } = await import('../services/whatsappBot.mjs');
-    if (whatsappStatus.connection !== 'open') {
-      throw new Error('Bot WhatsApp belum terhubung. Silakan scan QR hingga status Terhubung.');
-    }
+    const waSvc = require('../services/whatsappService');
     const adminNumbers = getSetting('whatsapp_admin_numbers', []);
     const legacyNumbers = getSetting('admins', []);
     let adminPhone = '087820851413'; // fallback
@@ -6069,10 +6066,10 @@ router.post('/whatsapp/test-notification', requireAdminSession, async (req, res)
     logger.info(`[WA Test] Mengirim test notifikasi ke nomor admin: ${adminPhone}`);
     const msg =
       `🧪 *TEST NOTIFIKASI WHATSAPP*\n\n` +
-      `✅ Jika pesan ini masuk, berarti notifikasi WhatsApp dari Billing Alijaya System sudah berfungsi.\n` +
+      `✅ Jika pesan ini masuk, berarti notifikasi WhatsApp dari Billing System sudah berfungsi dengan baik.\n` +
       `📅 Waktu: ${getNowLocal()}`;
-    const ok = await sendWA(adminPhone, msg);
-    if (!ok) throw new Error('Gagal mengirim pesan test (sendWA=false).');
+    const ok = await waSvc.sendWhatsAppMessage(adminPhone, msg);
+    if (!ok) throw new Error('Gagal mengirim pesan test WhatsApp.');
     logger.info(`[WA Test] Test notifikasi sukses terkirim ke ${adminPhone}`);
     req.session._msg = { type: 'success', text: 'Test notifikasi WhatsApp berhasil dikirim ke ' + adminPhone };
   } catch (e) {
@@ -6103,7 +6100,24 @@ router.post('/whatsapp/reset', requireAdminSession, (req, res) => {
     res.redirect('/admin/whatsapp');
   } catch (e) {
     logger.error('Failed to reset WA session:', e.message);
-    req.session._msg = { text: 'Gagal menghapus sesi: ' + e.message + '. (Kemungkinan file sedang digunakan, silakan matikan aplikasi dulu lalu hapus folder ' + getSetting('whatsapp_auth_folder', 'auth_info_baileys') + ' secara manual)', type: 'danger' };
+    req.session._msg = { text: 'Gagal menghapus sesi: ' + e.message, type: 'danger' };
+    res.redirect('/admin/whatsapp');
+  }
+});
+
+router.post('/whatsapp/repair-keys', requireAdminSession, async (req, res) => {
+  try {
+    const { cleanStaleSessionKeys, restartWhatsAppBot } = await import('../services/whatsappBot.mjs');
+    const cleaned = cleanStaleSessionKeys();
+    await restartWhatsAppBot();
+    req.session._msg = {
+      text: `Berhasil membersihkan ${cleaned} cache session/pre-key usang. Bot Baileys telah di-refresh tanpa perlu scan QR ulang.`,
+      type: 'success'
+    };
+    res.redirect('/admin/whatsapp');
+  } catch (e) {
+    logger.error('Failed to repair WA session keys:', e.message);
+    req.session._msg = { text: 'Gagal memperbaiki session keys: ' + e.message, type: 'danger' };
     res.redirect('/admin/whatsapp');
   }
 });
