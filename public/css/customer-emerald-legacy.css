@@ -1,0 +1,91 @@
+/* Emerald Green ISP — compatibility layer for legacy per-view classes */
+
+/* Public billing + QRIS */
+.cardx {
+  background: linear-gradient(145deg, rgba(9,42,29,.96), rgba(4,25,16,.97)) !important;
+  border: 1px solid rgba(52,211,153,.24) !important;
+  box-shadow: 0 28px 70px rgba(0,0,0,.44), 0 0 0 1px rgba(16,185,129,.04) !important;
+}
+.cardx > .head, .head {
+  background: linear-gradient(135deg, rgba(6,95,70,.66), rgba(4,120,87,.24)) !important;
+  border-bottom-color: rgba(52,211,153,.20) !important;
+}
+.cardx > .body, .body { color: #f0fdf4 !important; }
+.muted { color: #8fbea6 !important; }
+.tbl th, .tbl td { border-bottom-color: rgba(110,231,183,.13) !important; }
+.tbl thead th { color: #9ed8bc !important; }
+.tbl tbody td { color: #d1fae5 !important; }
+.tbl tbody tr:hover { background: rgba(16,185,129,.06) !important; }
+.pay-method-item {
+  background: rgba(4,40,26,.68) !important;
+  border-color: rgba(110,231,183,.16) !important;
+}
+.pay-method-item:hover {
+  background: rgba(5,64,42,.76) !important;
+  border-color: rgba(52,211,153,.46) !important;
+  box-shadow: 0 12px 30px rgba(16,185,129,.12) !important;
+}
+.pm-radio:checked + .pay-method-item {
+  background: rgba(16,185,129,.14) !important;
+  border-color: rgba(52,211,153,.72) !important;
+  box-shadow: 0 15px 34px rgba(16,185,129,.16) !important;
+}
+.p-icon { background: rgba(7,57,38,.92) !important; color:#34d399 !important; }
+.p-name { color:#f0fdf4 !important; }
+.p-sub { color:#8fbea6 !important; }
+.p-chip { color:#c9f8df !important; background:rgba(4,45,29,.68) !important; border-color:rgba(110,231,183,.18) !important; }
+.pb-qris, .pb-gopay { background:linear-gradient(135deg,#34d399,#059669) !important; color:#052e16 !important; }
+.qris-box { background:rgba(4,39,26,.62) !important; border-color:rgba(52,211,153,.18) !important; }
+.qrimg { background:#fff !important; box-shadow:0 16px 40px rgba(0,0,0,.40),0 0 0 1px rgba(52,211,153,.22) !important; }
+.pill-u { background:rgba(239,68,68,.13) !important; color:#fecaca !important; border-color:rgba(248,113,113,.28) !important; }
+.pill-p { background:rgba(16,185,129,.13) !important; color:#a7f3d0 !important; border-color:rgba(52,211,153,.28) !important; }
+
+/* Isolated page */
+.status-badge { background:rgba(239,68,68,.13) !important; color:#fca5a5 !important; border:1px solid rgba(248,113,113,.20); }
+.status-badge.success { background:rgba(16,185,129,.13) !important; color:#6ee7b7 !important; border-color:rgba(52,211,153,.22) !important; }
+.status-badge.warning { background:rgba(245,158,11,.12) !important; color:#fcd34d !important; border-color:rgba(245,158,11,.22) !important; }
+.description { color:#9cc6af !important; }
+.info-item {
+  background:rgba(4,40,26,.58) !important;
+  border:1px solid rgba(110,231,183,.12) !important;
+}
+.info-icon {
+  color:#6ee7b7 !important;
+  background:rgba(16,185,129,.13) !important;
+}
+.info-label { color:#88b59d !important; }
+.info-value { color:#ecfdf5 !important; }
+
+/* Common custom panels that exist in OTP/register/customer secondary screens */
+.login-box, .otp-card, .register-card, .main-card, .portal-card, .topup-card, .ppob-card {
+  background:linear-gradient(145deg,rgba(9,42,29,.94),rgba(4,25,16,.96)) !important;
+  border-color:rgba(52,211,153,.22) !important;
+  box-shadow:0 22px 55px rgba(0,0,0,.36) !important;
+}
+.icon-box, .icon-circle, .brand-icon {
+  background:linear-gradient(135deg,#10b981,#047857) !important;
+  color:#fff !important;
+  box-shadow:0 8px 22px rgba(16,185,129,.22) !important;
+}
+
+/* Make horizontal tabs feel like one product */
+.nav-pills .nav-link, .nav-tabs .nav-link {
+  color:#9bc4ad !important;
+  border-color:transparent !important;
+}
+.nav-pills .nav-link.active, .nav-tabs .nav-link.active {
+  color:#fff !important;
+  background:linear-gradient(135deg,#10b981,#047857) !important;
+  border-color:rgba(110,231,183,.20) !important;
+}
+
+/* Preserve semantic payment-brand colors when useful; chrome remains Emerald */
+.pb-dana { color:#07140f !important; }
+.pb-ovo, .pb-shopeepay, .pb-linkaja { color:#07140f !important; }
+
+@media (max-width:576px) {
+  .cardx { border-radius:18px !important; }
+  .head { padding:18px 16px !important; }
+  .body { padding:18px 14px !important; }
+  .info-item { border-radius:14px !important; }
+}
