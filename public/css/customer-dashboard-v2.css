@@ -1,0 +1,354 @@
+/* Emerald Green ISP — Customer Dashboard V2
+ * Progressive visual layer for views/dashboard.ejs.
+ * Keeps existing EJS variables, routes, forms, IDs and JavaScript handlers intact.
+ */
+
+body.customer-dashboard-v2 {
+  --dash-max: 1180px;
+  --dash-radius: 20px;
+}
+
+body.customer-dashboard-v2 .dashboard-shell {
+  max-width: var(--dash-max);
+}
+
+body.customer-dashboard-v2 .navbar {
+  min-height: 64px;
+}
+
+body.customer-dashboard-v2 .navbar .container {
+  max-width: var(--dash-max);
+}
+
+body.customer-dashboard-v2 .navbar-brand {
+  letter-spacing: -.02em;
+}
+
+body.customer-dashboard-v2 .hero-banner {
+  border-radius: 22px !important;
+  padding: 24px !important;
+  background:
+    linear-gradient(135deg, rgba(4, 120, 87, .50), rgba(4, 78, 59, .26) 48%, rgba(4, 32, 22, .94)) !important;
+  box-shadow: 0 20px 48px rgba(0,0,0,.30), 0 0 0 1px rgba(52,211,153,.06) inset !important;
+}
+
+body.customer-dashboard-v2 .hero-banner h3 {
+  font-size: clamp(1.35rem, 3vw, 2rem) !important;
+}
+
+body.customer-dashboard-v2 .hero-banner .badge {
+  background: rgba(16,185,129,.16) !important;
+  color: #a7f3d0 !important;
+  border-color: rgba(52,211,153,.30) !important;
+}
+
+body.customer-dashboard-v2 .bill-hero-card {
+  border-radius: 22px !important;
+  padding: 22px 24px !important;
+}
+
+body.customer-dashboard-v2 .bill-hero-card:not(.paid) {
+  background:
+    linear-gradient(135deg, rgba(120,53,15,.30), rgba(38,31,12,.76) 44%, rgba(5,32,22,.92)) !important;
+}
+
+body.customer-dashboard-v2 .bill-hero-card.paid {
+  background:
+    linear-gradient(135deg, rgba(4,120,87,.36), rgba(5,46,32,.74) 48%, rgba(4,30,20,.94)) !important;
+}
+
+body.customer-dashboard-v2 .btn-pay-hero {
+  min-height: 46px;
+  padding-inline: 20px !important;
+}
+
+body.customer-dashboard-v2 .action-grid {
+  grid-template-columns: repeat(6, minmax(0,1fr));
+  gap: 12px;
+}
+
+body.customer-dashboard-v2 .action-item {
+  min-height: 96px;
+  border-radius: 18px !important;
+  padding: 14px 8px !important;
+}
+
+body.customer-dashboard-v2 .action-icon {
+  width: 46px !important;
+  height: 46px !important;
+  border-radius: 14px !important;
+  box-shadow: 0 10px 24px rgba(0,0,0,.20) !important;
+}
+
+body.customer-dashboard-v2 .action-label {
+  font-size: 11px !important;
+}
+
+body.customer-dashboard-v2 #promoCarousel.dashboard-promo-secondary {
+  margin-top: 6px !important;
+  margin-bottom: 18px !important;
+}
+
+body.customer-dashboard-v2 .glass-card {
+  border-radius: 22px !important;
+}
+
+body.customer-dashboard-v2 .glass-header {
+  min-height: 58px;
+}
+
+body.customer-dashboard-v2 .wifi-box {
+  background: linear-gradient(145deg, rgba(4,51,33,.76), rgba(3,28,18,.88)) !important;
+  border-color: rgba(52,211,153,.20) !important;
+}
+
+body.customer-dashboard-v2 .traffic-gauge-value {
+  color: #d1fae5 !important;
+}
+
+body.customer-dashboard-v2 .customer-accordion .accordion-item {
+  overflow: hidden;
+}
+
+body.customer-dashboard-v2 .customer-accordion .accordion-button {
+  min-height: 58px;
+  padding: 16px 18px;
+  background: rgba(4,55,35,.42) !important;
+  box-shadow: none !important;
+}
+
+body.customer-dashboard-v2 .customer-accordion .accordion-button:not(.collapsed) {
+  background: rgba(5,86,56,.50) !important;
+  color: #ecfdf5 !important;
+}
+
+body.customer-dashboard-v2 .mobile-invoice-card {
+  background: linear-gradient(145deg, rgba(6,46,30,.92), rgba(3,24,16,.96)) !important;
+  border-color: rgba(52,211,153,.18) !important;
+}
+
+body.customer-dashboard-v2 #ticket-section table tbody tr {
+  background: rgba(4,42,27,.45) !important;
+}
+
+body.customer-dashboard-v2 .modal-content {
+  border-radius: 22px !important;
+}
+
+@media (max-width: 991px) {
+  body.customer-dashboard-v2 .action-grid {
+    grid-template-columns: repeat(3, 1fr) !important;
+  }
+}
+
+@media (max-width: 767px) {
+  body.customer-dashboard-v2 {
+    padding-bottom: calc(82px + env(safe-area-inset-bottom)) !important;
+  }
+
+  body.customer-dashboard-v2 .navbar {
+    min-height: 58px;
+    padding: 8px 0 !important;
+  }
+
+  body.customer-dashboard-v2 .navbar-brand {
+    font-size: 14px !important;
+    max-width: 42%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  body.customer-dashboard-v2 .navbar-brand img {
+    height: 32px !important;
+    border-radius: 9px !important;
+  }
+
+  body.customer-dashboard-v2 .navbar form[action='/customer/reconnect'] button {
+    width: 38px;
+    height: 38px;
+    padding: 0 !important;
+    justify-content: center;
+    font-size: 0 !important;
+    border-radius: 12px !important;
+  }
+
+  body.customer-dashboard-v2 .navbar form[action='/customer/reconnect'] button i {
+    font-size: 16px;
+    margin: 0 !important;
+  }
+
+  body.customer-dashboard-v2 .navbar form[action='/customer/logout'] button,
+  body.customer-dashboard-v2 .notif-bell-btn {
+    width: 38px !important;
+    height: 38px !important;
+    padding: 0 !important;
+  }
+
+  body.customer-dashboard-v2 #btn-install-pwa-dash {
+    display: none !important;
+  }
+
+  body.customer-dashboard-v2 .dashboard-shell {
+    margin-top: 12px !important;
+    padding-inline: 10px !important;
+  }
+
+  body.customer-dashboard-v2 #promoCarousel {
+    display: none;
+  }
+
+  body.customer-dashboard-v2 #promoCarousel.dashboard-promo-secondary {
+    display: block;
+    border-radius: 16px !important;
+    opacity: .94;
+  }
+
+  body.customer-dashboard-v2 #promoCarousel.dashboard-promo-secondary .carousel-item > div,
+  body.customer-dashboard-v2 #promoCarousel.dashboard-promo-secondary img {
+    min-height: 86px !important;
+    aspect-ratio: 16/5 !important;
+  }
+
+  body.customer-dashboard-v2 .hero-banner {
+    padding: 16px !important;
+    margin-bottom: 12px !important;
+    border-radius: 18px !important;
+  }
+
+  body.customer-dashboard-v2 .hero-banner h3 {
+    font-size: 1.25rem !important;
+  }
+
+  body.customer-dashboard-v2 .hero-banner p {
+    line-height: 1.5;
+    flex-wrap: wrap;
+  }
+
+  body.customer-dashboard-v2 #deviceSyncPanel {
+    width: 100%;
+  }
+
+  body.customer-dashboard-v2 #deviceSyncPanel button {
+    width: 100%;
+    justify-content: center;
+    min-height: 42px;
+  }
+
+  body.customer-dashboard-v2 .bill-hero-card {
+    text-align: left !important;
+    align-items: stretch !important;
+    padding: 16px !important;
+    border-radius: 18px !important;
+    margin-bottom: 12px !important;
+  }
+
+  body.customer-dashboard-v2 .bill-hero-card > .d-flex:first-child {
+    justify-content: flex-start !important;
+    align-items: center !important;
+  }
+
+  body.customer-dashboard-v2 .bill-hero-card h5 {
+    font-size: 1.35rem !important;
+  }
+
+  body.customer-dashboard-v2 .btn-pay-hero {
+    width: 100% !important;
+    min-height: 48px;
+    justify-content: center;
+    border-radius: 14px !important;
+  }
+
+  body.customer-dashboard-v2 .action-grid {
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 8px !important;
+    margin-bottom: 14px !important;
+  }
+
+  body.customer-dashboard-v2 .action-item {
+    min-height: 88px;
+    padding: 10px 5px !important;
+    border-radius: 16px !important;
+  }
+
+  body.customer-dashboard-v2 .action-icon {
+    width: 40px !important;
+    height: 40px !important;
+    border-radius: 12px !important;
+  }
+
+  body.customer-dashboard-v2 .action-label {
+    font-size: 10px !important;
+  }
+
+  body.customer-dashboard-v2 .row.g-3.g-lg-4.mb-4 {
+    margin-bottom: 14px !important;
+  }
+
+  body.customer-dashboard-v2 .glass-header {
+    min-height: 50px;
+    padding: 12px 14px !important;
+  }
+
+  body.customer-dashboard-v2 .glass-card .p-3.p-md-4,
+  body.customer-dashboard-v2 .glass-card .p-3.p-md-4.d-flex {
+    padding: 14px !important;
+  }
+
+  body.customer-dashboard-v2 .stats-grid {
+    gap: 6px !important;
+  }
+
+  body.customer-dashboard-v2 .stat-card {
+    min-height: 88px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  body.customer-dashboard-v2 .customer-accordion {
+    margin-bottom: 12px !important;
+  }
+
+  body.customer-dashboard-v2 .customer-accordion .accordion-item {
+    border-radius: 16px !important;
+    margin-bottom: 10px !important;
+  }
+
+  body.customer-dashboard-v2 .customer-accordion .accordion-button {
+    min-height: 52px;
+    padding: 13px 14px;
+    font-size: 13px;
+  }
+
+  body.customer-dashboard-v2 #ticket-section .accordion-body {
+    padding: 14px !important;
+  }
+
+  body.customer-dashboard-v2 #ticket-section .table-responsive {
+    overflow-x: auto;
+    border-radius: 12px;
+  }
+
+  body.customer-dashboard-v2 .modal-dialog {
+    margin: 10px;
+  }
+
+  body.customer-dashboard-v2 .modal-content {
+    border-radius: 20px !important;
+  }
+}
+
+@media (max-width: 390px) {
+  body.customer-dashboard-v2 .navbar-brand {
+    max-width: 35%;
+  }
+
+  body.customer-dashboard-v2 .action-grid {
+    gap: 6px !important;
+  }
+
+  body.customer-dashboard-v2 .action-item {
+    min-height: 82px;
+  }
+}
