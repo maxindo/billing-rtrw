@@ -609,6 +609,14 @@ function parseCommand(text, isAdmin) {
 
   if (['menu', 'bantuan', 'help'].includes(cmd)) return { cmd: 'menu', rest: '' };
 
+  if (['saldo', 'ceksaldo', 'saldomenu', 'mysaldo'].includes(cmd)) {
+    return { cmd: 'agent_saldo' };
+  }
+
+  if (['bayar', 'bayartagihan', 'pay', 'bayartag', 'lunaskan'].includes(cmd)) {
+    return { cmd: 'agent_bayar', target: rest || (parts.length >= 2 ? parts.slice(1).join(' ') : '') };
+  }
+
   if (isAdmin && ['admin', 'adminmenu', 'menuadmin'].includes(cmd)) return { cmd: 'adminmenu', rest: '' };
 
   if (isAdmin && ['listonu', 'listdevice', 'daftarperangkat'].includes(cmd)) {
@@ -632,6 +640,11 @@ function parseCommand(text, isAdmin) {
   if (isAdmin && cmd === 'addhotspot' && parts.length >= 4) return { cmd: 'addhotspot', admin: true, args: parts.slice(1) };
   if (isAdmin && cmd === 'vcr' && parts.length >= 3) return { cmd: 'vcr', admin: true, args: parts.slice(1) };
   if (isAdmin && cmd === 'delhotspot' && parts.length >= 2) return { cmd: 'delhotspot', admin: true, args: parts.slice(1) };
+
+  // Agent / Hotspot Voucher (Sistem Saldo): vcr or vcr <paket>
+  if (['vcr', 'voucher', 'belivoucher', 'buatvoucher'].includes(cmd)) {
+    return { cmd: 'agent_voucher', pkgKey: rest || (parts.length >= 2 ? parts.slice(1).join(' ') : '') };
+  }
 
   // Admin Billing & Pelanggan
   if (isAdmin && cmd === 'ringkasan') return { cmd: 'ringkasan', admin: true };
@@ -1417,9 +1430,12 @@ export async function processIncomingCommand({
           const agent = phone ? agentSvc.getAgentByPhone(phone) : null;
           if (agent) {
             body +=
-              '\n\n📱 *MENU AGENT*\n' +
-              '⚡ `pulsa SKU TARGET` — Beli pulsa/produk Digiflazz\n' +
-              '🔎 `cekpulsa TXID` — Cek status transaksi pulsa';
+              `\n\n📱 *MENU AGENT (@${agent.username || agent.name})*\n` +
+              '💳 `saldo` — Cek sisa saldo & komisi agent\n' +
+              '💰 `bayar <nama/nohp/id>` — Bayar tagihan pelanggan (potong saldo)\n' +
+              '🎟️ `vcr` / `vcr <paket>` — Buat voucher hotspot (potong saldo)\n' +
+              '⚡ `pulsa <SKU> <TARGET>` — Beli pulsa/produk Digiflazz\n' +
+              '🔎 `cekpulsa <TXID>` — Cek status transaksi pulsa';
           }
           await reply(body);
           return true;
@@ -1821,6 +1837,293 @@ export async function processIncomingCommand({
             );
           } catch (e) {
             await reply('❌ Gagal topup agent: ' + e.message);
+          }
+          return true;
+        }
+
+        if (parsed.cmd === 'agent_saldo') {
+          try {
+            const agent = phone ? agentSvc.getAgentByPhone(phone) : null;
+            if (!agent) {
+              if (isAdmin) {
+                const r = await agentSvc.digiflazzCheckBalance().catch(() => null);
+                const digiDeposit = Number(r?.deposit || 0);
+                await reply(
+                  `🏦 *SALDO DIGIFLAZZ (ADMIN)*\n\n` +
+                  `💳 Deposit: *Rp ${digiDeposit.toLocaleString('id-ID')}*\n\n` +
+                  `💡 _Nomor ini adalah Admin. Untuk cek saldo agent, daftarkan nomor ini di Menu Agent._`
+                );
+                return true;
+              }
+              await reply('❌ Nomor WhatsApp ini belum terdaftar sebagai Agent aktif.');
+              return true;
+            }
+
+            const fresh = agentSvc.getAgentById(agent.id);
+            const balance = Number(fresh?.balance || 0);
+            const fee = Number(fresh?.billing_fee || 0);
+            const { sep } = waBrand();
+
+            const msg =
+              `💳 *SALDO AGENT*\n` +
+              `${sep}\n` +
+              `👤 Agent: *${fresh.name}* (@${fresh.username})\n` +
+              `📞 No HP: *${fresh.phone || '-'}*\n` +
+              `💰 *Sisa Saldo: Rp ${balance.toLocaleString('id-ID')}*\n` +
+              `🎁 Komisi Tagihan: *Rp ${fee.toLocaleString('id-ID')} / transaksi*\n` +
+              `${sep}\n` +
+              `📋 *Perintah Transaksi:*\n` +
+              `• \`bayar <nama/nohp/id>\` — Bayar tagihan pelanggan\n` +
+              `• \`vcr\` — Lihat daftar paket voucher hotspot\n` +
+              `• \`vcr <paket>\` — Buat voucher hotspot\n` +
+              `• \`pulsa <sku> <nomor>\` — Beli pulsa/produk Digiflazz`;
+
+            await reply(msg);
+          } catch (e) {
+            await reply('❌ Gagal cek saldo agent: ' + e.message);
+          }
+          return true;
+        }
+
+        if (parsed.cmd === 'agent_bayar') {
+          try {
+            const agent = phone ? agentSvc.getAgentByPhone(phone) : null;
+            if (!agent) {
+              await reply('❌ Fitur pembayaran tagihan via saldo hanya untuk nomor WhatsApp yang terdaftar sebagai Agent.');
+              return true;
+            }
+
+            const keyRaw = String(parsed.target || '').trim();
+            if (!keyRaw) {
+              await reply(
+                '❌ *Format Perintah:*\n' +
+                '`bayar <nama/nohp/pppoe/id_pelanggan/id_tagihan>`\n\n' +
+                '💡 *Contoh:*\n' +
+                '• `bayar Budi`\n' +
+                '• `bayar 081234567890`\n' +
+                '• `bayar 105`'
+              );
+              return true;
+            }
+
+            const isNumeric = /^\d+$/.test(keyRaw);
+            let targetInv = null;
+
+            // 1. Cek apakah input adalah ID Invoice
+            if (isNumeric) {
+              targetInv = billingSvc.getInvoiceById(Number(keyRaw));
+            }
+
+            // 2. Jika bukan ID invoice atau tidak ketemu, cari pelanggan
+            if (!targetInv) {
+              let cust =
+                (isNumeric ? customerSvc.getCustomerById(Number(keyRaw)) : null) ||
+                customerSvc.findCustomerByAny(keyRaw);
+
+              if (!cust) {
+                const candidates = customerSvc.getAllCustomers(keyRaw) || [];
+                const unique = Array.from(new Map(candidates.map(c => [c.id, c])).values());
+                if (unique.length === 1) {
+                  cust = customerSvc.getCustomerById(unique[0].id);
+                } else if (unique.length > 1) {
+                  const top = unique.slice(0, 5).map(c =>
+                    `- ID:${c.id} • ${c.name || '-'} • ${c.phone || '-'} • PPPoE:${c.pppoe_username || '-'}`
+                  ).join('\n');
+                  await reply(`⚠️ Ditemukan ${unique.length} pelanggan bernama serupa:\n\n${top}\n\nKetik lebih spesifik: \`bayar IDPELANGGAN\` atau \`bayar NOHP\``);
+                  return true;
+                }
+              }
+
+              if (cust) {
+                const unpaid = billingSvc.getUnpaidInvoicesByCustomerId(cust.id);
+                if (unpaid && unpaid.length > 0) {
+                  targetInv = unpaid[0];
+                } else {
+                  await reply(`✅ Pelanggan *${cust.name}* (ID: ${cust.id}) tidak memiliki tagihan menunggak.`);
+                  return true;
+                }
+              }
+            }
+
+            if (!targetInv) {
+              await reply(`❌ Data tagihan atau pelanggan "*${keyRaw}*" tidak ditemukan.`);
+              return true;
+            }
+
+            if (targetInv.status === 'paid') {
+              await reply(`✅ Invoice *#${targetInv.id}* sudah berstatus LUNAS.`);
+              return true;
+            }
+
+            // Hitung pemotongan saldo: tagihan dikurangi komisi
+            const fee = Math.max(0, Number(agent.billing_fee || 0) || 0);
+            const invoiceAmount = Number(targetInv.amount || 0);
+            const cost = Math.max(0, invoiceAmount - fee);
+
+            const freshAgent = agentSvc.getAgentById(agent.id);
+            const currentBalance = Number(freshAgent?.balance || 0);
+
+            if (currentBalance < cost) {
+              await reply(
+                `❌ *SALDO AGENT TIDAK MENCUKUPI*\n\n` +
+                `🧾 Tagihan: Rp ${invoiceAmount.toLocaleString('id-ID')}\n` +
+                `🎁 Komisi Agent: Rp ${fee.toLocaleString('id-ID')}\n` +
+                `💰 Potong Saldo: *Rp ${cost.toLocaleString('id-ID')}*\n` +
+                `💳 Sisa Saldo Anda: *Rp ${currentBalance.toLocaleString('id-ID')}*\n\n` +
+                `Silakan hubungi Admin untuk top up saldo agent.`
+              );
+              return true;
+            }
+
+            const result = await agentSvc.payInvoiceAsAgent(agent.id, targetInv.id, 'Via WhatsApp Bot');
+            const customer = customerSvc.getCustomerById(targetInv.customer_id);
+            const customerName = String(targetInv.customer_name || customer?.name || '-');
+            const remainingBalance = Number(result?.agent?.balance ?? result?.tx?.after ?? (currentBalance - cost));
+
+            const { sep } = waBrand();
+            const receiptMsg =
+              `✅ *PEMBAYARAN TAGIHAN BERHASIL*\n` +
+              `${sep}\n` +
+              `👤 Pelanggan: *${customerName}* (ID: ${targetInv.customer_id})\n` +
+              `🧾 No Invoice: *#${targetInv.id}*\n` +
+              `📦 Paket: *${targetInv.package_name || customer?.package_name || '-'}*\n` +
+              `📅 Periode: *${targetInv.period_month}/${targetInv.period_year}*\n` +
+              `💵 Total Tagihan: Rp ${invoiceAmount.toLocaleString('id-ID')}\n` +
+              `🎁 Komisi Agent: Rp ${fee.toLocaleString('id-ID')}\n` +
+              `${sep}\n` +
+              `💰 *Potong Saldo:* Rp ${cost.toLocaleString('id-ID')}\n` +
+              `💳 *SISA SALDO AGENT: Rp ${remainingBalance.toLocaleString('id-ID')}*\n` +
+              `${sep}\n` +
+              `Terima kasih telah bertransaksi.`;
+
+            await reply(receiptMsg);
+
+            // Notifikasi ke pelanggan jika ada nomor kontak
+            const notifyTag = customer?.genieacs_tag || customer?.pppoe_username || customer?.phone || targetInv.customer_phone || '';
+            if (notifyTag) {
+              const formatter = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 });
+              notifyCustomer(
+                currentSockInstance,
+                currentLidStore,
+                notifyTag,
+                waWrap(
+                  '✅ *PEMBAYARAN BERHASIL*',
+                  `Tagihan internet Anda telah *LUNAS* dibayarkan via Agent *${agent.name}*.\n\n` +
+                  `🧾 *No Invoice:* #${targetInv.id}\n` +
+                  `👤 *Nama:* ${customerName}\n` +
+                  `📅 *Periode:* ${targetInv.period_month}/${targetInv.period_year}\n` +
+                  `💰 *Total:* ${formatter.format(invoiceAmount)}\n\n` +
+                  `🟢 Layanan internet Anda aktif.\n\n` +
+                  `Terima kasih.`
+                )
+              ).catch(() => {});
+            }
+          } catch (e) {
+            logger.error('[WA agent_bayar] Gagal bayar tagihan: ' + e.message);
+            await reply('❌ Gagal memproses pembayaran tagihan: ' + e.message);
+          }
+          return true;
+        }
+
+        if (parsed.cmd === 'agent_voucher') {
+          try {
+            const agent = phone ? agentSvc.getAgentByPhone(phone) : null;
+            if (!agent) {
+              await reply('❌ Fitur pembuatan voucher hotspot via saldo hanya untuk nomor WhatsApp yang terdaftar sebagai Agent.');
+              return true;
+            }
+
+            const pkgKeyRaw = String(parsed.pkgKey || '').trim();
+            const prices = agentSvc.getAgentPrices(agent.id) || [];
+
+            if (!prices || prices.length === 0) {
+              await reply('⚠️ Belum ada paket voucher hotspot yang aktif untuk akun Agent Anda. Silakan hubungi Admin.');
+              return true;
+            }
+
+            const freshAgent = agentSvc.getAgentById(agent.id);
+            const currentBalance = Number(freshAgent?.balance || 0);
+
+            // Jika tanpa argumen, tampilkan daftar paket voucher
+            if (!pkgKeyRaw) {
+              const { sep } = waBrand();
+              let listStr =
+                `🎟️ *DAFTAR PAKET VOUCHER HOTSPOT*\n` +
+                `${sep}\n` +
+                `💳 *Sisa Saldo Anda: Rp ${currentBalance.toLocaleString('id-ID')}*\n\n` +
+                `Pilih paket di bawah ini:\n`;
+
+              prices.forEach((p, idx) => {
+                const buyPrice = Number(p.buy_price || 0);
+                const sellPrice = Number(p.sell_price || 0);
+                const profit = Math.max(0, sellPrice - buyPrice);
+                listStr +=
+                  `\n*${idx + 1}. ${p.profile_name}* (ID: \`${p.id}\`)` +
+                  `\n   ⏳ Masa Aktif: ${p.validity || '24 Jam'}` +
+                  `\n   💰 Potong Saldo: Rp ${buyPrice.toLocaleString('id-ID')}` +
+                  `\n   🏷️ Harga Jual: Rp ${sellPrice.toLocaleString('id-ID')} (Untung: Rp ${profit.toLocaleString('id-ID')})` +
+                  `\n   👉 Ketik: \`vcr ${p.id}\` atau \`vcr ${p.profile_name}\`\n`;
+              });
+
+              listStr += `\n${sep}\n💡 _Ketik \`vcr <ID/NamaPaket>\` untuk langsung membuat voucher._`;
+              await reply(listStr);
+              return true;
+            }
+
+            // Cari paket berdasarkan ID atau substring nama profile
+            const isNumeric = /^\d+$/.test(pkgKeyRaw);
+            let matchedPrice = null;
+            if (isNumeric) {
+              matchedPrice = prices.find(p => Number(p.id) === Number(pkgKeyRaw));
+            }
+            if (!matchedPrice) {
+              const pkgLc = pkgKeyRaw.toLowerCase();
+              matchedPrice = prices.find(p => String(p.profile_name || '').toLowerCase() === pkgLc) ||
+                             prices.find(p => String(p.profile_name || '').toLowerCase().includes(pkgLc));
+            }
+
+            if (!matchedPrice) {
+              await reply(`❌ Paket voucher "*${pkgKeyRaw}*" tidak ditemukan.\n\nKetik \`vcr\` untuk melihat daftar paket yang tersedia.`);
+              return true;
+            }
+
+            const buyPrice = Number(matchedPrice.buy_price || 0);
+            const sellPrice = Number(matchedPrice.sell_price || 0);
+
+            if (currentBalance < buyPrice) {
+              await reply(
+                `❌ *SALDO AGENT TIDAK MENCUKUPI*\n\n` +
+                `🎟️ Paket: *${matchedPrice.profile_name}*\n` +
+                `💰 Potong Saldo: *Rp ${buyPrice.toLocaleString('id-ID')}*\n` +
+                `💳 Sisa Saldo Anda: *Rp ${currentBalance.toLocaleString('id-ID')}*\n\n` +
+                `Silakan hubungi Admin untuk top up saldo agent.`
+              );
+              return true;
+            }
+
+            const result = await agentSvc.sellVoucherAsAgent(agent.id, matchedPrice.id);
+            const voucher = result.voucher;
+            const remainingBalance = Number(result?.agent?.balance ?? result?.tx?.after ?? (currentBalance - buyPrice));
+            const { sep } = waBrand();
+
+            const voucherMsg =
+              `🎟️ *VOUCHER HOTSPOT BERHASIL DIBUAT*\n` +
+              `${sep}\n` +
+              `👤 *Username:* \`${voucher.code}\`\n` +
+              `🔑 *Password:* \`${voucher.password}\`\n` +
+              `🏷️ *Paket:* ${matchedPrice.profile_name}\n` +
+              `⏳ *Masa Aktif:* ${result.receipt?.validity || matchedPrice.validity || '24 Jam'}\n` +
+              `💵 *Harga Jual:* Rp ${sellPrice.toLocaleString('id-ID')}\n` +
+              `${sep}\n` +
+              `💰 *Potong Saldo:* Rp ${buyPrice.toLocaleString('id-ID')}\n` +
+              `💳 *SISA SALDO AGENT: Rp ${remainingBalance.toLocaleString('id-ID')}*\n` +
+              `${sep}\n` +
+              `_Voucher siap digunakan pelanggan._`;
+
+            await reply(voucherMsg);
+          } catch (e) {
+            logger.error('[WA agent_voucher] Gagal buat voucher: ' + e.message);
+            await reply('❌ Gagal membuat voucher: ' + e.message);
           }
           return true;
         }
