@@ -40,6 +40,7 @@
               <th><%= t('admin.agents.table.name', 'Nama') %></th>
               <th><%= t('admin.agents.table.username', 'Username') %></th>
               <th><%= t('admin.agents.table.phone', 'No. HP') %></th>
+              <th>Router</th>
               <th class="num"><%= t('admin.agents.table.balance', 'Saldo') %></th>
               <th class="num"><%= t('admin.agents.table.billing_fee', 'Fee Tagihan') %></th>
               <th><%= t('admin.agents.table.status', 'Status') %></th>
@@ -48,13 +49,14 @@
           </thead>
           <tbody>
             <% if (!agents || agents.length === 0) { %>
-              <tr><td colspan="7" class="text-center text-muted" style="padding:20px"><%= t('admin.agents.empty', 'Belum ada agent.') %></td></tr>
+              <tr><td colspan="8" class="text-center text-muted" style="padding:20px"><%= t('admin.agents.empty', 'Belum ada agent.') %></td></tr>
             <% } else { %>
               <% agents.forEach(a => { %>
                 <tr>
                   <td class="fw6"><%= a.name %></td>
                   <td><code><%= a.username %></code></td>
                   <td><%= a.phone || '-' %></td>
+                  <td><span class="badge" style="background:var(--card-border,#334155);color:var(--text,#e2e8f0)"><i class="bi bi-hdd-network"></i> <%= a.router_name || '(Semua/Default)' %></span></td>
                   <td class="num fw6">Rp <%= Number(a.balance || 0).toLocaleString('id-ID') %></td>
                   <td class="num">Rp <%= Number(a.billing_fee || 0).toLocaleString('id-ID') %></td>
                   <td>
@@ -104,6 +106,15 @@
         <div class="fg"><label class="fl"><%= t('admin.agents.form.username', 'Username') %></label><input type="text" name="username" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.password', 'Password') %></label><input type="text" name="password" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.phone', 'No. HP') %></label><input type="text" name="phone" class="fc" placeholder="08123456789"></div>
+        <div class="fg">
+          <label class="fl">Router Wilayah / Area</label>
+          <select name="router_id" class="fs">
+            <option value="">(Semua Router / Default)</option>
+            <% (routers || []).forEach(r => { %>
+              <option value="<%= r.id %>"><%= r.name %></option>
+            <% }) %>
+          </select>
+        </div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.billing_fee', 'Fee Tagihan (Rp)') %></label><input type="number" name="billing_fee" class="fc" value="0" min="0"></div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.initial_balance', 'Saldo Awal (Rp)') %></label><input type="number" name="balance" class="fc" value="0" min="0"></div>
       </div>
@@ -124,6 +135,15 @@
         <div class="fg"><label class="fl"><%= t('admin.agents.form.username', 'Username') %></label><input type="text" name="username" id="ea-username" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.password', 'Password') %></label><input type="text" name="password" id="ea-password" class="fc" required></div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.phone', 'No. HP') %></label><input type="text" name="phone" id="ea-phone" class="fc"></div>
+        <div class="fg">
+          <label class="fl">Router Wilayah / Area</label>
+          <select name="router_id" id="ea-router-id" class="fs">
+            <option value="">(Semua Router / Default)</option>
+            <% (routers || []).forEach(r => { %>
+              <option value="<%= r.id %>"><%= r.name %></option>
+            <% }) %>
+          </select>
+        </div>
         <div class="fg"><label class="fl"><%= t('admin.agents.form.billing_fee', 'Fee Tagihan (Rp)') %></label><input type="number" name="billing_fee" id="ea-fee" class="fc" min="0"></div>
         <div class="fg">
           <label class="fl"><%= t('admin.agents.form.status', 'Status') %></label>
@@ -264,6 +284,7 @@ function editAgent(a) {
   document.getElementById('ea-username').value = a.username || '';
   document.getElementById('ea-password').value = a.password || '';
   document.getElementById('ea-phone').value = a.phone || '';
+  document.getElementById('ea-router-id').value = a.router_id || '';
   document.getElementById('ea-fee').value = Number(a.billing_fee || 0);
   document.getElementById('ea-active').value = String(a.is_active ? 1 : 0);
   openModal('editAgentModal');
