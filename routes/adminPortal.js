@@ -2704,7 +2704,9 @@ router.post('/billing/:id/pay', requireAdminSession, express.urlencoded({ extend
 
     const paidBy = resolvePaidByName(req, req.body.paid_by_name);
     const wasPaid = String(inv.status || '').toLowerCase() === 'paid';
-    billingSvc.markAsPaid(req.params.id, paidBy, req.body.notes);
+    if (!wasPaid) {
+      billingSvc.markAsPaid(req.params.id, paidBy, req.body.notes);
+    }
     
     // Check if customer is currently suspended and has no more unpaid invoices
     const customer = customerSvc.getCustomerById(inv.customer_id);
@@ -2725,13 +2727,13 @@ router.post('/billing/:id/pay', requireAdminSession, express.urlencoded({ extend
       );
     }
     if (customer && customer.status === 'suspended') {
-      const freshCustomer = customerSvc.getAllCustomers().find(c => c.id === inv.customer_id);
-      if (freshCustomer && freshCustomer.unpaid_count === 0) {
+      const unpaidCount = db.prepare("SELECT COUNT(*) as cnt FROM invoices WHERE customer_id=? AND status='unpaid'").get(inv.customer_id)?.cnt || 0;
+      if (unpaidCount === 0) {
         await customerSvc.activateCustomer(inv.customer_id);
       }
     }
 
-    req.session._msg = { type: 'success', text: 'Tagihan berhasil ditandai lunas.' };
+    req.session._msg = { type: 'success', text: wasPaid ? 'Tagihan ini memang sudah lunas sebelumnya.' : 'Tagihan berhasil ditandai lunas.' };
   } catch (e) {
     req.session._msg = { type: 'error', text: 'Gagal: ' + e.message };
   }
