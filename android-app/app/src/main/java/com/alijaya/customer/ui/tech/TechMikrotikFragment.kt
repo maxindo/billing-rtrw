@@ -52,6 +52,8 @@ class TechMikrotikFragment : Fragment() {
         return if (base.endsWith("/")) base.dropLast(1) else base
     }
 
+    private fun getToken(): String = CustomerApplication.sessionManager.getAuthToken()
+
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
     ): View {
@@ -95,7 +97,10 @@ class TechMikrotikFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val url = "${getBaseUrl()}/api/customer/app/tech/mikrotik/profiles"
-                val req = Request.Builder().url(url).build()
+                val req = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer ${getToken()}")
+                    .build()
                 val resp = httpClient().newCall(req).execute()
                 val body = resp.body?.string() ?: ""
                 val json = JSONObject(body)
@@ -118,7 +123,10 @@ class TechMikrotikFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val url = "${getBaseUrl()}/api/customer/app/tech/mikrotik/secrets"
-                val req = Request.Builder().url(url).build()
+                val req = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer ${getToken()}")
+                    .build()
                 val resp = httpClient().newCall(req).execute()
                 val body = resp.body?.string() ?: ""
                 val json = JSONObject(body)
@@ -221,7 +229,9 @@ class TechMikrotikFragment : Fragment() {
                     put("comment", comment)
                 }
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url(url).post(body).build()
+                val req = Request.Builder().url(url)
+                    .addHeader("Authorization", "Bearer ${getToken()}")
+                    .post(body).build()
                 val resp = httpClient().newCall(req).execute()
                 val resJson = JSONObject(resp.body?.string() ?: "")
 
@@ -287,7 +297,9 @@ class TechMikrotikFragment : Fragment() {
                     put("profile", profile)
                 }
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url(url).post(body).build()
+                val req = Request.Builder().url(url)
+                    .addHeader("Authorization", "Bearer ${getToken()}")
+                    .post(body).build()
                 val resp = httpClient().newCall(req).execute()
                 val resJson = JSONObject(resp.body?.string() ?: "")
 
@@ -321,7 +333,9 @@ class TechMikrotikFragment : Fragment() {
                 val url = "${getBaseUrl()}/api/customer/app/tech/mikrotik/secret/kick"
                 val payload = JSONObject().apply { put("username", username) }
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url(url).post(body).build()
+                val req = Request.Builder().url(url)
+                    .addHeader("Authorization", "Bearer ${getToken()}")
+                    .post(body).build()
                 val resp = httpClient().newCall(req).execute()
                 val resJson = JSONObject(resp.body?.string() ?: "")
 
@@ -355,7 +369,9 @@ class TechMikrotikFragment : Fragment() {
                 val url = "${getBaseUrl()}/api/customer/app/tech/mikrotik/secret/delete"
                 val payload = JSONObject().apply { put("username", username) }
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url(url).post(body).build()
+                val req = Request.Builder().url(url)
+                    .addHeader("Authorization", "Bearer ${getToken()}")
+                    .post(body).build()
                 val resp = httpClient().newCall(req).execute()
                 val resJson = JSONObject(resp.body?.string() ?: "")
 
