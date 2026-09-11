@@ -1465,8 +1465,12 @@ router.get('/app/admin/whatsapp/status', requireAdminApiAuth, async (req, res) =
 router.get('/app/admin/digiflazz/status', requireAdminApiAuth, async (req, res) => {
   try {
     const settings = getSettingsWithCache();
-    const username = settings.digiflazz_username || '';
-    const isActive = settings.digiflazz_enabled === '1' || settings.digiflazz_enabled === 'true';
+    const username = String(settings.digiflazz_username || '').trim();
+    const apiKey = String(settings.digiflazz_api_key || '').trim();
+    // Digiflazz is configured if both username and apiKey exist (consistent with web portal in adminPortal.js)
+    const isConfigured = Boolean(username && apiKey);
+    // Active if configured and not explicitly disabled ('0' or false)
+    const isActive = isConfigured && settings.digiflazz_enabled !== '0' && settings.digiflazz_enabled !== false;
 
     let todayCount = 0;
     let todayTotal = 0;
@@ -1486,11 +1490,13 @@ router.get('/app/admin/digiflazz/status', requireAdminApiAuth, async (req, res) 
     }
 
     let saldo = 0;
-    if (isActive && username) {
+    let balanceError = null;
+    if (isConfigured) {
       try {
         const bal = await agentSvc.digiflazzCheckBalance();
         saldo = Number(bal?.deposit || 0);
       } catch (balErr) {
+        balanceError = balErr.message;
         logger.warn('[Digiflazz Status] Cek saldo note: ' + balErr.message);
       }
     }
@@ -1499,14 +1505,26 @@ router.get('/app/admin/digiflazz/status', requireAdminApiAuth, async (req, res) 
       success: true,
       data: {
         enabled: isActive,
-        username,
+        configured: isConfigured,
+        username: username || '-',
         saldo,
+        balanceError,
         todayCount,
         todayTotal
       }
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+router.post('/app/admin/digiflazz/check-balance', requireAdminApiAuth, async (req, res) => {
+  try {
+    const bal = await agentSvc.digiflazzCheckBalance();
+    const saldo = Number(bal?.deposit || 0);
+    res.json({ success: true, saldo, message: `Saldo Digiflazz: Rp ${saldo.toLocaleString('id-ID')}` });
+  } catch (e) {
+    res.status(500).json({ success: false, message: 'Gagal cek saldo Digiflazz: ' + (e?.message || e) });
   }
 });
 

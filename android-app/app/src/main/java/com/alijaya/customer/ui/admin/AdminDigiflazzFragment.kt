@@ -69,7 +69,7 @@ class AdminDigiflazzFragment : Fragment() {
         loadStatus()
     }
 
-    private fun loadStatus() {
+    private fun loadStatus(showToast: Boolean = false) {
         binding.swipeRefresh.isRefreshing = true
         lifecycleScope.launch {
             val url = "${getBaseUrl()}/api/customer/app/admin/digiflazz/status"
@@ -96,11 +96,19 @@ class AdminDigiflazzFragment : Fragment() {
                     val todayTotal = data.optDouble("todayTotal", 0.0)
 
                     renderUI(enabled, username, saldo, todayCount, todayTotal)
+                    if (showToast) {
+                        val fmt = NumberFormat.getCurrencyInstance(Locale("id", "ID"))
+                        val msg = if (enabled) "Saldo Digiflazz: ${fmt.format(saldo)}" else "Digiflazz belum aktif / Kunci API belum diisi"
+                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                    }
                     return@launch
                 } catch (_: Exception) {}
             }
 
             renderErrorUI()
+            if (showToast) {
+                android.widget.Toast.makeText(context, "Gagal mengambil status Digiflazz", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -223,7 +231,7 @@ class AdminDigiflazzFragment : Fragment() {
             textSize = 12f
             setOnClickListener {
                 android.widget.Toast.makeText(ctx, "Mengecek status & saldo ke server...", android.widget.Toast.LENGTH_SHORT).show()
-                loadStatus()
+                loadStatus(showToast = true)
             }
         }
         statusLayout.addView(btnCheckSaldo)
