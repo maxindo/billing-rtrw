@@ -637,9 +637,12 @@ async function sellVoucherAsAgent(agentId, priceId, opts = {}) {
   while (attempt < 10) {
     attempt++;
     const code = (prefix ? prefix : '') + genCode(length, charset);
-    const password = opts.mode === 'member' ? genCode(length, charset) : code;
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yy = String(now.getFullYear()).slice(-2);
     const agentName = String(agent.name || agent.username || 'Agent').trim().replace(/\s+/g, '_');
-    const comment = `vc-${code}-${profileName}-${agentName}`;
+    const comment = `vc-${agentName}-${dd}.${mm}.${yy}`;
     const userData = { server: 'all', name: code, password, profile: profileName, comment };
     if (validity) userData['limit-uptime'] = validity;
 

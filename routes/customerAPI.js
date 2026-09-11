@@ -1465,6 +1465,15 @@ router.get('/app/admin/vouchers/options', requireAdminApiAuth, async (req, res) 
     const companyPhone = settings.company_phone || '';
     const hotspotDns = settings.hotspot_dns || settings.hotspot_name || 'wifi.id';
 
+    const roleName = (req.admin?.role === 'cashier' || req.admin?.username?.toLowerCase().includes('kasir')) 
+      ? (req.admin?.username || 'kasir') 
+      : 'admin';
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yy = String(now.getFullYear()).slice(-2);
+    const defaultComment = `vc-${roleName}-${dd}.${mm}.${yy}`;
+
     res.json({
       success: true,
       data: {
@@ -1472,7 +1481,8 @@ router.get('/app/admin/vouchers/options', requireAdminApiAuth, async (req, res) 
         profiles,
         companyName,
         companyPhone,
-        hotspotDns
+        hotspotDns,
+        defaultComment
       }
     });
   } catch (e) {
@@ -1489,7 +1499,16 @@ router.post('/app/admin/vouchers/create-single', requireAdminApiAuth, express.js
     const price = Number(req.body.price) || 0;
     const validity = String(req.body.validity || '').trim();
     const buyerPhone = String(req.body.buyerPhone || '').trim();
-    const comment = String(req.body.comment || `vc-${username || 'single'}-${profileName}`).trim();
+
+    const roleName = (req.admin?.role === 'cashier' || req.admin?.username?.toLowerCase().includes('kasir')) 
+      ? (req.admin?.username || 'kasir') 
+      : 'admin';
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yy = String(now.getFullYear()).slice(-2);
+    const defaultComment = `vc-${roleName}-${dd}.${mm}.${yy}`;
+    const comment = String(req.body.comment || defaultComment).trim();
 
     if (!profileName) return res.status(400).json({ success: false, message: 'Profile hotspot wajib diisi' });
 
@@ -1505,9 +1524,9 @@ router.post('/app/admin/vouchers/create-single', requireAdminApiAuth, express.js
 
     const insertBatch = db.prepare(`
       INSERT INTO voucher_batches (router_id, profile_name, qty_total, qty_created, qty_failed, price, validity, prefix, code_length, status, created_by, mode, charset, updated_at)
-      VALUES (?, ?, 1, 1, 0, ?, ?, '', ?, 'completed', 'admin_native', ?, 'numbers', (NOW_LOCAL()))
+      VALUES (?, ?, 1, 1, 0, ?, ?, '', ?, 'completed', ?, ?, 'numbers', (NOW_LOCAL()))
     `);
-    const batchRes = insertBatch.run(routerId, profileName, price, validity, username.length, username === password ? 'voucher' : 'member');
+    const batchRes = insertBatch.run(routerId, profileName, price, validity, username.length, roleName, username === password ? 'voucher' : 'member');
     const batchId = Number(batchRes.lastInsertRowid);
 
     const insertVoucher = db.prepare(`
@@ -1548,6 +1567,7 @@ router.post('/app/admin/vouchers/create-single', requireAdminApiAuth, express.js
         code: username,
         password: password,
         profile: profileName,
+        comment: comment,
         price,
         priceFormatted: `Rp ${price.toLocaleString('id-ID')}`,
         validity: validity || '-',
@@ -1574,15 +1594,25 @@ router.post('/app/admin/vouchers/create-batch', requireAdminApiAuth, express.jso
     const price = Number(req.body.price) || 0;
     const validity = String(req.body.validity || '').trim();
 
+    const roleName = (req.admin?.role === 'cashier' || req.admin?.username?.toLowerCase().includes('kasir')) 
+      ? (req.admin?.username || 'kasir') 
+      : 'admin';
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yy = String(now.getFullYear()).slice(-2);
+    const defaultComment = `vc-${roleName}-${dd}.${mm}.${yy}`;
+    const batchComment = String(req.body.comment || defaultComment).trim();
+
     if (!profileName) return res.status(400).json({ success: false, message: 'Profile hotspot wajib diisi' });
     if (!qty) return res.status(400).json({ success: false, message: 'Jumlah voucher wajib diisi' });
     if (prefix.length >= codeLength) return res.status(400).json({ success: false, message: 'Prefix terlalu panjang untuk panjang kode yang dipilih' });
 
     const insertBatch = db.prepare(`
       INSERT INTO voucher_batches (router_id, profile_name, qty_total, qty_created, qty_failed, price, validity, prefix, code_length, status, created_by, mode, charset, updated_at)
-      VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?, 'creating', 'admin_native', ?, ?, (NOW_LOCAL()))
+      VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?, 'creating', ?, ?, ?, (NOW_LOCAL()))
     `);
-    const batchRes = insertBatch.run(routerId, profileName, qty, price, validity, prefix, codeLength, mode, charset);
+    const batchRes = insertBatch.run(routerId, profileName, qty, price, validity, prefix, codeLength, roleName, mode, charset);
     const batchId = Number(batchRes.lastInsertRowid);
 
     const insertVoucher = db.prepare(`
@@ -1610,7 +1640,7 @@ router.post('/app/admin/vouchers/create-batch', requireAdminApiAuth, express.jso
 
     const tx = db.transaction((items) => {
       for (const item of items) {
-        insertVoucher.run(batchId, routerId, item.userCode, item.passCode, profileName, `vc-${item.userCode}-${profileName}`);
+        insertVoucher.run(batchId, routerId, item.userCode, item.passCode, profileName, batchComment);
       }
     });
     tx(initialVouchers);
@@ -1627,7 +1657,7 @@ router.post('/app/admin/vouchers/create-batch', requireAdminApiAuth, express.jso
             name: v.code,
             password: v.password,
             profile: profileName,
-            comment: v.comment
+            comment: v.comment || batchComment
           };
           if (validity) uData['limit-uptime'] = validity;
 

@@ -479,7 +479,7 @@ async function createVoucherBatchAsync(batchId) {
         }
 
         try {
-          const comment = `vc-${generated.userCode}-${batch.profile_name}`;
+          const comment = current.comment || `vc-${batch.created_by || 'admin'}`;
           const userData = {
             server: 'all',
             name: generated.userCode,
@@ -5159,13 +5159,20 @@ router.post('/api/vouchers/batches', requireAdmin, express.json(), async (req, r
     const meta = parseMikhmonOnLogin(profile.onLogin || profile['on-login']);
     if (!meta || !meta.validity) return res.status(400).json({ error: 'Profile belum memiliki metadata harga/durasi (Format Mikhmon)' });
 
-    const createdBy = req.session?.isAdmin ? (req.session.adminUser || 'admin') : (req.session.cashierName || 'staff');
+    const createdBy = req.session?.isAdmin ? (req.session.adminUser || 'admin') : (req.session.cashierName || 'kasir');
     let price = Number(meta.price || 0);
     if (priceInput !== undefined && priceInput !== null && String(priceInput).trim() !== '') {
       const p = Number(priceInput);
       if (!Number.isFinite(p) || p < 0) return res.status(400).json({ error: 'Harga tidak valid' });
       price = Math.floor(p);
     }
+
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yy = String(now.getFullYear()).slice(-2);
+    const defaultComment = `vc-${createdBy}-${dd}.${mm}.${yy}`;
+    const comment = String(req.body.comment || defaultComment).trim();
 
     const insertBatch = db.prepare(`
       INSERT INTO voucher_batches (router_id, profile_name, qty_total, qty_created, qty_failed, price, validity, prefix, code_length, status, created_by, mode, charset)
@@ -5202,7 +5209,7 @@ router.post('/api/vouchers/batches', requireAdmin, express.json(), async (req, r
 
     const tx = db.transaction((items) => {
       for (const c of items) {
-        insertVoucher.run(batchId, routerId, c.userCode, c.passCode, profileName, `vc-${c.userCode}-${profileName}`);
+        insertVoucher.run(batchId, routerId, c.userCode, c.passCode, profileName, comment);
       }
     });
     tx(initialVouchers);

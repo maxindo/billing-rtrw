@@ -77,6 +77,7 @@ class AdminVouchersFragment : Fragment() {
     private var cachedCompanyName = "ISP NETWORK"
     private var cachedCompanyPhone = ""
     private var cachedHotspotDns = "wifi.id"
+    private var cachedDefaultComment = "vc-admin"
 
     private fun httpClient() = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -484,6 +485,7 @@ class AdminVouchersFragment : Fragment() {
                 cachedCompanyName = data.optString("companyName", "ISP NETWORK")
                 cachedCompanyPhone = data.optString("companyPhone", "")
                 cachedHotspotDns = data.optString("hotspotDns", "wifi.id")
+                cachedDefaultComment = data.optString("defaultComment", "vc-admin")
 
                 if (cachedProfiles.length() == 0) {
                     Toast.makeText(ctx, "Tidak ada User Profile Hotspot di MikroTik", Toast.LENGTH_LONG).show()
@@ -597,6 +599,25 @@ class AdminVouchersFragment : Fragment() {
             setHintTextColor(colorTextMuted)
         }
         layout.addView(etValidity)
+
+        // Comment MikroTik
+        val tvCommentLabel = TextView(ctx).apply {
+            text = "Komentar MikroTik (Comment):"
+            setTextColor(colorTextMuted)
+            textSize = 12f
+            setPadding(0, 12, 0, 4)
+        }
+        layout.addView(tvCommentLabel)
+
+        val etComment = EditText(ctx).apply {
+            background = createInputBackground()
+            setTextColor(colorTextWhite)
+            setPadding(20, 18, 20, 18)
+            setText(cachedDefaultComment)
+            hint = "Contoh: vc-admin-12.09.26"
+            setHintTextColor(colorTextMuted)
+        }
+        layout.addView(etComment)
 
         // Listener to auto-fill price and validity when profile changed
         spProfile.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -845,8 +866,9 @@ class AdminVouchersFragment : Fragment() {
                         return@setOnClickListener
                     }
 
+                    val commentVal = etComment.text.toString().trim()
                     dialog.dismiss()
-                    executeCreateSingleVoucher(selectedProfile, priceVal, validityVal, u, p, buyerPhone)
+                    executeCreateSingleVoucher(selectedProfile, priceVal, validityVal, u, p, buyerPhone, commentVal)
                 } else {
                     // Batch voucher creation
                     val qty = etQty.text.toString().trim().toIntOrNull() ?: 0
@@ -862,9 +884,10 @@ class AdminVouchersFragment : Fragment() {
                         else -> "numbers"
                     }
                     val mode = if (spMode.selectedItemPosition == 1) "member" else "voucher"
+                    val commentVal = etComment.text.toString().trim()
 
                     dialog.dismiss()
-                    executeCreateBatchVouchers(selectedProfile, qty, prefix, len, charset, mode, priceVal, validityVal)
+                    executeCreateBatchVouchers(selectedProfile, qty, prefix, len, charset, mode, priceVal, validityVal, commentVal)
                 }
             }
         }
@@ -878,7 +901,8 @@ class AdminVouchersFragment : Fragment() {
         validity: String,
         username: String,
         password: String,
-        buyerPhone: String
+        buyerPhone: String,
+        comment: String = ""
     ) {
         val ctx = context ?: return
         val progress = AlertDialog.Builder(ctx)
@@ -895,6 +919,7 @@ class AdminVouchersFragment : Fragment() {
                 if (username.isNotEmpty()) put("username", username)
                 if (password.isNotEmpty()) put("password", password)
                 if (buyerPhone.isNotEmpty()) put("buyerPhone", buyerPhone)
+                if (comment.isNotEmpty()) put("comment", comment)
             }
 
             val resultStr = withContext(Dispatchers.IO) {
@@ -1212,7 +1237,8 @@ class AdminVouchersFragment : Fragment() {
         charset: String,
         mode: String,
         price: Double,
-        validity: String
+        validity: String,
+        comment: String = ""
     ) {
         val ctx = context ?: return
         val progress = AlertDialog.Builder(ctx)
@@ -1231,6 +1257,7 @@ class AdminVouchersFragment : Fragment() {
                 put("mode", mode)
                 put("price", price)
                 put("validity", validity)
+                if (comment.isNotEmpty()) put("comment", comment)
             }
 
             val resultStr = withContext(Dispatchers.IO) {
