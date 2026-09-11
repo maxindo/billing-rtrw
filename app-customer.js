@@ -329,18 +329,40 @@ function parseRupiahAmountFromNotification(content) {
   if (!text) return null;
 
   const lower = text.toLowerCase();
+
+  // Deteksi chat/reaksi/kutipan tagihan yang bukan transaksi finansial asli
+  const chatOrInvoiceHints = [
+    'bereaksi', 'reacted', 'membalas', 'tagihan manual', 'kode bayar qris',
+    'rincian tagihan', 'portal pelanggan', 'silakan scan', 'mohon scan',
+    'link login', 'pengingat tagihan', 'halo pelanggan', 'yth. pelanggan',
+    'paket internet anda', 'sebelum tanggal jatuh tempo'
+  ];
+  if (chatOrInvoiceHints.some((h) => lower.includes(h))) {
+    return null;
+  }
+
   const incomingHints = [
-    'menerima', 'diterima', 'masuk', 'saldo masuk', 'saldo bertambah',
-    'pembayaran masuk', 'pembayaran diterima', 'received', 'incoming',
-    'qris berhasil', 'qris sukses', 'qr berhasil', 'qr sukses'
+    'pembayaran masuk', 'pembayaran diterima', 'uang masuk', 'transfer masuk',
+    'dana masuk', 'saldo masuk', 'saldo bertambah', 'berhasil top up',
+    'top up berhasil', 'topup berhasil', 'terima uang', 'telah diterima dari',
+    'diterima dari', 'qris berhasil', 'qris sukses', 'qr berhasil', 'qr sukses',
+    'payment received', 'kamu menerima', 'berhasil menerima', 'menambahkan',
+    'telah diterima sebesar', 'uang diterima'
   ];
   const outgoingHints = [
-    'mengirim', 'terkirim', 'transfer ke', 'bayar ke', 'pembayaran berhasil',
-    'berhasil bayar', 'pembelian', 'belanja', 'purchase'
+    'mengirim', 'terkirim', 'telah dikirim', 'berhasil kirim', 'transfer ke',
+    'bayar ke', 'pembayaran berhasil', 'berhasil bayar', 'pembelian',
+    'belanja', 'purchase', 'kamu membayar', 'transaksi keluar', 'debit',
+    'dikenakan biaya', 'potongan'
   ];
+
   const hasIncomingHint = incomingHints.some((hint) => lower.includes(hint));
   const hasOutgoingHint = outgoingHints.some((hint) => lower.includes(hint));
-  if (hasOutgoingHint && !hasIncomingHint) return null;
+
+  // WAJIB: Harus ada indikator uang masuk dan TIDAK BOLEH ada indikator uang keluar
+  if (!hasIncomingHint || hasOutgoingHint) {
+    return null;
+  }
 
   const candidates = [
     /(?:\bRp\.?\s*|IDR\s*)([0-9][0-9\.\,\s]*)/i,
@@ -717,6 +739,17 @@ app.post('/api/webhook/v1/payment-notif', multer().any(), async (req, res) => {
     return res.status(403).json({ ok: false, error: 'Forbidden', reason: 'secret_key_mismatch' });
   }
 
+  // Tolak langsung aplikasi chat / pesan instan (WhatsApp, Telegram, SMS chat pribadi)
+  const serviceLower = String(service || '').toLowerCase();
+  const blockedServices = [
+    'whatsapp', 'com.whatsapp', 'telegram', 'org.telegram', 'facebook',
+    'orca', 'instagram', 'messaging', 'mms', 'line', 'wechat', 'viber'
+  ];
+  if (blockedServices.some(b => serviceLower.includes(b))) {
+    logger.warn(`[WEBHOOK][payment-notif] Ignored: chat/social messaging service detected (${serviceLower})`);
+    return res.status(200).json({ status: 'ignored', reason: 'chat_service_ignored', service: serviceLower });
+  }
+
   // Safe debugging: log incoming request parameters (secrets masked)
   const sanitizeForLog = (obj) => {
     if (!obj || typeof obj !== 'object') return {};
@@ -772,6 +805,18 @@ app.post('/api/webhook/v1/payment-notif', multer().any(), async (req, res) => {
     .join(' ');
 
   logger.info(`[WEBHOOK][payment-notif] IN service=${String(service || '-')} content="${rawText.replace(/\r?\n/g, ' ').slice(0, 500)}"`);
+
+  const rawLower = rawText.toLowerCase();
+  const chatOrInvoiceHints = [
+    'bereaksi', 'reacted', 'membalas', 'tagihan manual', 'kode bayar qris',
+    'rincian tagihan', 'portal pelanggan', 'silakan scan', 'mohon scan',
+    'link login', 'pengingat tagihan', 'halo pelanggan', 'yth. pelanggan',
+    'paket internet anda', 'sebelum tanggal jatuh tempo'
+  ];
+  if (chatOrInvoiceHints.some((h) => rawLower.includes(h))) {
+    logger.warn(`[WEBHOOK][payment-notif] Ignored: chat/invoice quoting content detected ("${rawText.slice(0, 150)}")`);
+    return res.status(200).json({ status: 'ignored', reason: 'chat_or_invoice_quoted_ignored' });
+  }
 
   try {
     const amount = parseRupiahAmountFromNotification(rawText);

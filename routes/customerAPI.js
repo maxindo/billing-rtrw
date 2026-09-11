@@ -3755,8 +3755,78 @@ router.get('/invoices', requireCustomerApiAuth, (req, res) => {
   });
 });
 
-router.get('/invoices/:id', requireCustomerApiAuth, async (req, res) => {
+function ensureCustomerApiInvoiceQrisUnique(inv) {
+  const invId = Number(inv?.id || 0);
+  const custId = Number(inv?.customer_id || 0);
+  const baseAmount = Number(inv?.amount || 0);
+  if (!invId || baseAmount <= 0) {
+    return { uniqueCode: 0, amountUnique: baseAmount };
+  }
+
+  const currentAmount = Number(inv?.qris_amount_unique || 0);
+  const currentCode = Number(inv?.qris_unique_code || 0);
+  if (currentAmount > 0 && currentCode > 0 && (currentAmount - currentCode === baseAmount)) {
+    return { uniqueCode: currentCode, amountUnique: currentAmount };
+  }
+
+  const exists = db.prepare('SELECT id FROM invoices WHERE status=? AND qris_amount_unique=? AND id!=? LIMIT 1');
+  let chosenCode = 0;
+  let chosenAmount = 0;
+
+  // 1. Prioritaskan ID Pelanggan sebagai kode unik utama (1 s/d 499)
+  if (custId > 0) {
+    const prefCode = (custId % 499 === 0) ? 499 : (custId % 499);
+    const prefAmount = baseAmount + prefCode;
+    if (!exists.get('unpaid', prefAmount, invId)) {
+      chosenCode = prefCode;
+      chosenAmount = prefAmount;
+    }
+  }
+
+  // 2. Jika kode ID Pelanggan sudah terpakai, cari kode 1 s/d 499
+  if (!chosenAmount) {
+    for (let code = 1; code <= 499; code++) {
+      const amount = baseAmount + code;
+      if (!exists.get('unpaid', amount, invId)) {
+        chosenCode = code;
+        chosenAmount = amount;
+        break;
+      }
+    }
+  }
+
+  // 3. Fallback 500 s/d 999
+  if (!chosenAmount) {
+    for (let code = 500; code <= 999; code++) {
+      const amount = baseAmount + code;
+      if (!exists.get('unpaid', amount, invId)) {
+        chosenCode = code;
+        chosenAmount = amount;
+        break;
+      }
+    }
+  }
+
+  if (chosenAmount > 0 && String(inv?.status) === 'unpaid') {
+    try {
+      db.prepare(`
+        UPDATE invoices
+        SET qris_unique_code=?, qris_amount_unique=?, qris_assigned_at=(NOW_LOCAL())
+        WHERE id=?
+      `).run(chosenCode, chosenAmount, invId);
+    } catch (_) {}
+    return { uniqueCode: chosenCode, amountUnique: chosenAmount };
+  }
+
+  return { uniqueCode: chosenCode || 0, amountUnique: chosenAmount || baseAmount };
+}
+
+router.get('/invoices/:id', requireCustomerApiAuth, (req, res) => {
   const invId = Number(req.params.id);
+  if (!invId) {
+    return res.status(400).json({ success: false, message: 'ID tagihan tidak valid.' });
+  }
+
   const inv = db.prepare(`
     SELECT i.*, c.name as customer_name, c.phone as customer_phone, p.name as package_name
     FROM invoices i
@@ -3771,8 +3841,9 @@ router.get('/invoices/:id', requireCustomerApiAuth, async (req, res) => {
 
   const settings = getSettingsWithCache();
   const baseAmt = Number(inv.amount || 0);
-  const uniqueCode = inv.unique_code ? Number(inv.unique_code) : (((inv.id * 17) % 899) + 100);
-  const totalAmt = baseAmt + uniqueCode;
+  const qrisInfo = ensureCustomerApiInvoiceQrisUnique(inv);
+  const uniqueCode = qrisInfo.uniqueCode;
+  const totalAmt = qrisInfo.amountUnique || baseAmt;
 
   let rawPayload = String(settings.qris_static_payload || '').trim();
   let qrisPayload = '';
@@ -3810,22 +3881,23 @@ router.get('/invoices/:id', requireCustomerApiAuth, async (req, res) => {
 });
 
 // Endpoint Gambar QRIS Dinamis Langsung (PNG Stream)
-// Endpoint Gambar QRIS Dinamis Langsung (PNG Stream)
 router.get('/invoices/:id/qris-image', async (req, res) => {
   try {
     const invId = Number(req.params.id);
     let inv = null;
     if (invId > 0) {
-      inv = db.prepare('SELECT id, amount, unique_code FROM invoices WHERE id = ?').get(invId);
+      inv = db.prepare('SELECT id, customer_id, amount, status, qris_unique_code, qris_amount_unique FROM invoices WHERE id = ?').get(invId);
     }
     if (!inv) {
-      inv = db.prepare("SELECT id, amount, unique_code FROM invoices WHERE status != 'paid' ORDER BY id DESC LIMIT 1").get() || { id: 10, amount: 150000, unique_code: 123 };
+      inv = db.prepare("SELECT id, customer_id, amount, status, qris_unique_code, qris_amount_unique FROM invoices WHERE status != 'paid' ORDER BY id DESC LIMIT 1").get();
+    }
+    if (!inv) {
+      inv = { id: 1, customer_id: 1, amount: 150000, status: 'unpaid' };
     }
 
     const settings = getSettingsWithCache();
-    const baseAmt = Number(inv.amount || 150000);
-    const uniqueCode = inv.unique_code ? Number(inv.unique_code) : (((inv.id * 17) % 899) + 100);
-    const totalAmt = baseAmt + uniqueCode;
+    const qrisInfo = ensureCustomerApiInvoiceQrisUnique(inv);
+    const totalAmt = qrisInfo.amountUnique || Number(inv.amount || 150000);
 
     let payload = settings.qris_static_payload || '00020101021126570011ID.DANA.WWW011893600915346519740402094651974040303UMI51440014ID.CO.QRIS.WWW0215ID10232708012520303UMI5204549953033605802ID5907ALIJAYA6014Kab. Indramayu6105452576304E962';
     try {

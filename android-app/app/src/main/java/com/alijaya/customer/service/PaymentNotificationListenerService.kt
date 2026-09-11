@@ -80,6 +80,24 @@ class PaymentNotificationListenerService : NotificationListenerService() {
             return
         }
 
+        // Abaikan mutlak aplikasi chat & pesan instan (WhatsApp, Telegram, SMS Messenger, dll)
+        val blacklistedPackages = setOf(
+            "com.whatsapp",
+            "com.whatsapp.w4b",
+            "org.telegram.messenger",
+            "org.thunderdog.challegram",
+            "com.facebook.orca",
+            "com.instagram.android",
+            "com.google.android.apps.messaging",
+            "com.android.mms",
+            "com.samsung.android.messaging",
+            "jp.naver.line.android",
+            "com.tencent.mm"
+        )
+        if (blacklistedPackages.contains(pkgName) || pkgName.contains("whatsapp", ignoreCase = true) || pkgName.contains("telegram", ignoreCase = true)) {
+            return
+        }
+
         val extras: Bundle = sbn.notification.extras ?: return
         val title = (extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: "").trim()
         val text = (extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: "").trim()
@@ -129,12 +147,34 @@ class PaymentNotificationListenerService : NotificationListenerService() {
 
     private fun containsPaymentKeyword(text: String): Boolean {
         val lower = text.lowercase(Locale.ROOT)
-        val keywords = listOf(
-            "rp", "idr", "transfer masuk", "dana masuk", "uang masuk", "terima", "diterima",
-            "berhasil", "sukses", "qris", "pembayaran", "top up", "topup", "saldo masuk",
-            "masuk dari", "dari", "kredit", "cr", "payment received"
+
+        // Deteksi dan abaikan chat/reaksi pesan/kutipan tagihan
+        val chatOrInvoiceHints = listOf(
+            "bereaksi", "reacted", "membalas", "tagihan manual", "kode bayar qris",
+            "rincian tagihan", "portal pelanggan", "silakan scan", "mohon scan",
+            "link login", "pengingat tagihan", "halo pelanggan", "yth. pelanggan",
+            "paket internet anda", "sebelum tanggal jatuh tempo"
         )
-        return keywords.any { lower.contains(it) }
+        if (chatOrInvoiceHints.any { lower.contains(it) }) {
+            return false
+        }
+
+        val keywords = listOf(
+            "transfer masuk", "dana masuk", "uang masuk", "pembayaran masuk",
+            "pembayaran diterima", "saldo masuk", "saldo bertambah", "berhasil top up",
+            "top up berhasil", "topup berhasil", "terima uang", "telah diterima dari",
+            "diterima dari", "qris berhasil", "qris sukses", "qr berhasil", "qr sukses",
+            "payment received", "kamu menerima", "berhasil menerima", "uang diterima"
+        )
+        val hasInbound = keywords.any { lower.contains(it) }
+
+        val outgoingHints = listOf(
+            "telah dikirim", "berhasil kirim", "transfer ke", "bayar ke", "berhasil bayar",
+            "pembelian", "belanja", "kamu membayar", "transaksi keluar", "dikenakan biaya"
+        )
+        val hasOutbound = outgoingHints.any { lower.contains(it) }
+
+        return hasInbound && !hasOutbound
     }
 
     private fun mapPackageToServiceName(pkg: String): String {
