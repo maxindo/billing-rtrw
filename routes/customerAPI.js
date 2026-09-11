@@ -1405,6 +1405,19 @@ router.get('/app/admin/cash-in', requireAdminApiAuth, (req, res) => {
   }
 });
 
+function generateVoucherCode(len, charset) {
+  const n = Math.max(3, Math.min(16, Number(len) || 6));
+  let chars = '0123456789';
+  if (charset === 'letters') chars = 'abcdefghjkmnpqrstuvwxyz';
+  else if (charset === 'mixed') chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    out += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  if (charset === 'numbers' && out[0] === '0') out = '1' + out.slice(1);
+  return out;
+}
+
 // ─── ADMIN NATIVE: VOUCHER HOTSPOT ───────────────────────────────────────────
 router.get('/app/admin/vouchers', requireAdminApiAuth, (req, res) => {
   try {
@@ -1415,8 +1428,505 @@ router.get('/app/admin/vouchers', requireAdminApiAuth, (req, res) => {
       FROM voucher_batches b ORDER BY b.id DESC LIMIT 50
     `).all() || [];
     const totalVouchers = db.prepare(`SELECT COUNT(*) as c FROM vouchers`).get()?.c || 0;
-    const unsold = db.prepare(`SELECT COUNT(*) as c FROM vouchers WHERE status = 'unused' OR status IS NULL OR status = 'new'`).get()?.c || 0;
+    const unsold = db.prepare(`SELECT COUNT(*) as c FROM vouchers WHERE status = 'unused' OR status IS NULL OR status = 'new' OR status = 'created'`).get()?.c || 0;
     res.json({ success: true, data: { batches, totalVouchers, unsold } });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+router.get('/app/admin/vouchers/options', requireAdminApiAuth, async (req, res) => {
+  try {
+    const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+    const routers = db.prepare(`SELECT id, name, host, port, is_active FROM routers ORDER BY id ASC`).all() || [];
+
+    let profiles = [];
+    try {
+      const mikrotikProfiles = await mikrotikService.getHotspotUserProfiles(routerId);
+      const { parseMikhmonOnLogin } = require('../utils/mikhmonParser');
+      profiles = (mikrotikProfiles || []).map(p => {
+        const rawOnLogin = p.onLogin || p['on-login'] || '';
+        const meta = parseMikhmonOnLogin(rawOnLogin);
+        return {
+          name: p.name,
+          sharedUsers: p['shared-users'] || p.sharedUsers || 1,
+          rateLimit: p['rate-limit'] || p.rateLimit || '',
+          price: meta?.price || 0,
+          validity: meta?.validity || '',
+          rawOnLogin
+        };
+      });
+    } catch (mErr) {
+      logger.warn('[Voucher Options] MikroTik profile fetch error: ' + mErr.message);
+    }
+
+    const settings = getSettingsWithCache();
+    const companyName = settings.company_header || settings.company_name || 'ISP NETWORK';
+    const companyPhone = settings.company_phone || '';
+    const hotspotDns = settings.hotspot_dns || settings.hotspot_name || 'wifi.id';
+
+    res.json({
+      success: true,
+      data: {
+        routers,
+        profiles,
+        companyName,
+        companyPhone,
+        hotspotDns
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+router.post('/app/admin/vouchers/create-single', requireAdminApiAuth, express.json(), async (req, res) => {
+  try {
+    const routerId = req.body.routerId ? Number(req.body.routerId) : null;
+    const profileName = String(req.body.profile || '').trim();
+    let username = String(req.body.username || '').trim();
+    let password = String(req.body.password || '').trim();
+    const price = Number(req.body.price) || 0;
+    const validity = String(req.body.validity || '').trim();
+    const buyerPhone = String(req.body.buyerPhone || '').trim();
+    const comment = String(req.body.comment || `vc-${username || 'single'}-${profileName}`).trim();
+
+    if (!profileName) return res.status(400).json({ success: false, message: 'Profile hotspot wajib diisi' });
+
+    if (!username) {
+      const prefix = String(req.body.prefix || '').trim();
+      const len = Math.max(4, Math.min(12, Number(req.body.codeLength) || 6));
+      const charset = String(req.body.charset || 'numbers');
+      username = prefix + generateVoucherCode(len - prefix.length, charset);
+      if (!password) password = username;
+    } else if (!password) {
+      password = username;
+    }
+
+    const insertBatch = db.prepare(`
+      INSERT INTO voucher_batches (router_id, profile_name, qty_total, qty_created, qty_failed, price, validity, prefix, code_length, status, created_by, mode, charset, updated_at)
+      VALUES (?, ?, 1, 1, 0, ?, ?, '', ?, 'completed', 'admin_native', ?, 'numbers', (NOW_LOCAL()))
+    `);
+    const batchRes = insertBatch.run(routerId, profileName, price, validity, username.length, username === password ? 'voucher' : 'member');
+    const batchId = Number(batchRes.lastInsertRowid);
+
+    const insertVoucher = db.prepare(`
+      INSERT INTO vouchers (batch_id, router_id, code, password, profile_name, comment, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'unused', (NOW_LOCAL()))
+    `);
+    const vRes = insertVoucher.run(batchId, routerId, username, password, profileName, comment);
+    const voucherId = Number(vRes.lastInsertRowid);
+
+    const userData = {
+      server: 'all',
+      name: username,
+      password: password,
+      profile: profileName,
+      comment: comment
+    };
+    if (validity) userData['limit-uptime'] = validity;
+
+    try {
+      await mikrotikService.addHotspotUser(userData, routerId);
+    } catch (mErr) {
+      db.prepare('UPDATE vouchers SET status = ? WHERE id = ?').run('failed', voucherId);
+      db.prepare('UPDATE voucher_batches SET qty_created = 0, qty_failed = 1, status = ? WHERE id = ?').run('failed', batchId);
+      return res.status(500).json({ success: false, message: 'Gagal simpan ke MikroTik: ' + mErr.message });
+    }
+
+    const settings = getSettingsWithCache();
+    const companyName = settings.company_header || settings.company_name || 'ISP NETWORK';
+    const companyPhone = settings.company_phone || '';
+    const hotspotDns = settings.hotspot_dns || settings.hotspot_name || 'wifi.id';
+
+    res.json({
+      success: true,
+      message: `Voucher "${username}" berhasil dibuat!`,
+      data: {
+        id: voucherId,
+        batchId,
+        code: username,
+        password: password,
+        profile: profileName,
+        price,
+        priceFormatted: `Rp ${price.toLocaleString('id-ID')}`,
+        validity: validity || '-',
+        buyerPhone,
+        companyName,
+        companyPhone,
+        hotspotDns
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+router.post('/app/admin/vouchers/create-batch', requireAdminApiAuth, express.json(), async (req, res) => {
+  try {
+    const routerId = req.body.routerId ? Number(req.body.routerId) : null;
+    const profileName = String(req.body.profile || '').trim();
+    const qty = Math.max(1, Math.min(2000, Number(req.body.qty) || 0));
+    const prefix = String(req.body.prefix || '').trim();
+    const codeLength = Math.max(4, Math.min(16, Number(req.body.codeLength) || 6));
+    const mode = String(req.body.mode || 'voucher');
+    const charset = String(req.body.charset || 'numbers');
+    const price = Number(req.body.price) || 0;
+    const validity = String(req.body.validity || '').trim();
+
+    if (!profileName) return res.status(400).json({ success: false, message: 'Profile hotspot wajib diisi' });
+    if (!qty) return res.status(400).json({ success: false, message: 'Jumlah voucher wajib diisi' });
+    if (prefix.length >= codeLength) return res.status(400).json({ success: false, message: 'Prefix terlalu panjang untuk panjang kode yang dipilih' });
+
+    const insertBatch = db.prepare(`
+      INSERT INTO voucher_batches (router_id, profile_name, qty_total, qty_created, qty_failed, price, validity, prefix, code_length, status, created_by, mode, charset, updated_at)
+      VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?, 'creating', 'admin_native', ?, ?, (NOW_LOCAL()))
+    `);
+    const batchRes = insertBatch.run(routerId, profileName, qty, price, validity, prefix, codeLength, mode, charset);
+    const batchId = Number(batchRes.lastInsertRowid);
+
+    const insertVoucher = db.prepare(`
+      INSERT INTO vouchers (batch_id, router_id, code, password, profile_name, comment, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', (NOW_LOCAL()))
+    `);
+    const existsInDb = db.prepare('SELECT 1 FROM vouchers WHERE router_id IS ? AND code = ? LIMIT 1');
+
+    const codes = new Set();
+    const makeCode = () => {
+      const coreLen = Math.max(3, codeLength - prefix.length);
+      const userCode = prefix + generateVoucherCode(coreLen, charset);
+      const passCode = (mode === 'member') ? generateVoucherCode(coreLen, charset) : userCode;
+      return { userCode, passCode };
+    };
+
+    const initialVouchers = [];
+    while (initialVouchers.length < qty) {
+      const gen = makeCode();
+      if (codes.has(gen.userCode)) continue;
+      if (existsInDb.get(routerId, gen.userCode)) continue;
+      codes.add(gen.userCode);
+      initialVouchers.push(gen);
+    }
+
+    const tx = db.transaction((items) => {
+      for (const item of items) {
+        insertVoucher.run(batchId, routerId, item.userCode, item.passCode, profileName, `vc-${item.userCode}-${profileName}`);
+      }
+    });
+    tx(initialVouchers);
+
+    setImmediate(async () => {
+      const vouchersToPush = db.prepare('SELECT id, code, password, comment FROM vouchers WHERE batch_id = ?').all(batchId);
+      let createdCount = 0;
+      let failedCount = 0;
+
+      for (const v of vouchersToPush) {
+        try {
+          const uData = {
+            server: 'all',
+            name: v.code,
+            password: v.password,
+            profile: profileName,
+            comment: v.comment
+          };
+          if (validity) uData['limit-uptime'] = validity;
+
+          await mikrotikService.addHotspotUser(uData, routerId);
+          db.prepare('UPDATE vouchers SET status = ? WHERE id = ?').run('unused', v.id);
+          createdCount++;
+        } catch (mErr) {
+          logger.warn(`[Batch ${batchId}] Error adding voucher ${v.code}: ${mErr.message}`);
+          db.prepare('UPDATE vouchers SET status = ? WHERE id = ?').run('failed', v.id);
+          failedCount++;
+        }
+      }
+
+      db.prepare(`
+        UPDATE voucher_batches 
+        SET qty_created = ?, qty_failed = ?, status = ?, updated_at = (NOW_LOCAL())
+        WHERE id = ?
+      `).run(createdCount, failedCount, failedCount === 0 ? 'completed' : 'partial', batchId);
+    });
+
+    res.json({
+      success: true,
+      message: `Batch ${qty} voucher berhasil dibuat dan sedang disinkronkan ke MikroTik.`,
+      data: {
+        batchId,
+        qty,
+        profile: profileName,
+        price,
+        validity
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+router.get('/app/admin/vouchers/batch/:id/vouchers', requireAdminApiAuth, (req, res) => {
+  try {
+    const batchId = Number(req.params.id);
+    const batch = db.prepare('SELECT * FROM voucher_batches WHERE id = ?').get(batchId);
+    if (!batch) return res.status(404).json({ success: false, message: 'Batch tidak ditemukan' });
+
+    const vouchers = db.prepare('SELECT id, code, password, profile_name, status, used_at FROM vouchers WHERE batch_id = ? ORDER BY id ASC').all(batchId) || [];
+    const settings = getSettingsWithCache();
+    const companyName = settings.company_header || settings.company_name || 'ISP NETWORK';
+    const companyPhone = settings.company_phone || '';
+    const hotspotDns = settings.hotspot_dns || settings.hotspot_name || 'wifi.id';
+
+    res.json({
+      success: true,
+      data: {
+        batch,
+        vouchers,
+        companyName,
+        companyPhone,
+        hotspotDns
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+router.get('/app/admin/vouchers/batch/:id/print', (req, res) => {
+  try {
+    const token = extractToken(req);
+    const payload = verifyApiToken(token);
+    if (!payload || (payload.role !== 'admin' && payload.role !== 'root' && payload.role !== 'cashier')) {
+      return res.status(401).send(`
+        <!DOCTYPE html><html><head><meta charset="utf-8"><title>Akses Ditolak</title>
+        <style>body{background:#0f172a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;}</style>
+        </head><body><div><h2>🔒 Autentikasi Diperlukan</h2><p>Sesi login tidak valid. Buka kembali dari aplikasi.</p></div></body></html>
+      `);
+    }
+
+    const batchId = Number(req.params.id);
+    const batch = db.prepare('SELECT * FROM voucher_batches WHERE id = ?').get(batchId);
+    if (!batch) return res.status(404).send('<h3>Batch voucher tidak ditemukan</h3>');
+
+    const vouchers = db.prepare('SELECT code, password, profile_name, status FROM vouchers WHERE batch_id = ? ORDER BY id ASC').all(batchId) || [];
+    const settings = getSettingsWithCache();
+    const companyName = settings.company_header || settings.company_name || 'ISP NETWORK';
+    const companyPhone = settings.company_phone || '';
+    const hotspotDns = settings.hotspot_dns || settings.hotspot_name || 'wifi.id';
+    const priceText = Number(batch.price || 0).toLocaleString('id-ID');
+    const validityText = batch.validity || '-';
+
+    const escapeHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+    const html = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vouchers #${batch.id} - ${escapeHtml(companyName)}</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 6mm;
+    }
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #fff;
+      color: #0f172a;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+    .voucher-card {
+      border: 1.5px dashed #475569;
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: #ffffff;
+      position: relative;
+      break-inside: avoid;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      height: 120px;
+      overflow: hidden;
+    }
+    .v-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #cbd5e1;
+      padding-bottom: 4px;
+    }
+    .v-brand {
+      font-weight: 800;
+      font-size: 11px;
+      color: #0f172a;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 110px;
+    }
+    .v-price {
+      font-weight: 900;
+      font-size: 11px;
+      background: #dcfce7;
+      color: #166534;
+      border: 1px solid #86efac;
+      padding: 1px 6px;
+      border-radius: 12px;
+      white-space: nowrap;
+    }
+    .v-pkg {
+      font-size: 10px;
+      color: #475569;
+      margin-top: 4px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .v-code-box {
+      text-align: center;
+      margin: 4px 0;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 4px 2px;
+    }
+    .v-code {
+      font-family: "Courier New", Courier, monospace;
+      font-size: 17px;
+      font-weight: 900;
+      color: #0369a1;
+      letter-spacing: 1.5px;
+      line-height: 1.1;
+    }
+    .v-member {
+      font-family: "Courier New", Courier, monospace;
+      font-size: 11.5px;
+      font-weight: 700;
+      color: #0f172a;
+      line-height: 1.2;
+    }
+    .v-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px dotted #cbd5e1;
+      padding-top: 4px;
+      font-size: 8.5px;
+      color: #64748b;
+    }
+    .v-dns { font-weight: 700; color: #2563eb; }
+    @media screen {
+      body { padding: 16px; background: #0f172a; }
+      .print-bar {
+        max-width: 800px;
+        margin: 0 auto 16px;
+        background: #1e293b;
+        padding: 12px 16px;
+        border-radius: 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: #fff;
+      }
+      .btn-print {
+        background: #2563eb;
+        color: #fff;
+        border: none;
+        padding: 8px 18px;
+        font-weight: 700;
+        font-size: 14px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .grid-wrapper {
+        max-width: 800px;
+        margin: 0 auto;
+        background: #fff;
+        padding: 16px;
+        border-radius: 12px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+      }
+    }
+    @media print {
+      .print-bar { display: none !important; }
+      body { background: #fff !important; }
+      .grid-wrapper { padding: 0 !important; box-shadow: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-bar">
+    <div>
+      <strong>Batch #${batch.id} (${vouchers.length} Voucher)</strong><br>
+      <small>Paket: ${escapeHtml(batch.profile_name)} • Rp ${priceText} • Durasi: ${escapeHtml(validityText)}</small>
+    </div>
+    <button class="btn-print" onclick="window.print()">🖨️ Cetak / Simpan PDF A4</button>
+  </div>
+  <div class="grid-wrapper">
+    <div class="grid">
+      ${vouchers.map(v => {
+        const isSame = String(v.code) === String(v.password);
+        return `
+        <div class="voucher-card">
+          <div class="v-top">
+            <span class="v-brand">${escapeHtml(companyName)}</span>
+            <span class="v-price">Rp ${priceText}</span>
+          </div>
+          <div class="v-pkg">📦 ${escapeHtml(batch.profile_name)} • ⏱️ ${escapeHtml(validityText)}</div>
+          <div class="v-code-box">
+            ${isSame ? `
+              <div style="font-size:8px;color:#64748b;font-weight:700">KODE VOUCHER LOGIN:</div>
+              <div class="v-code">${escapeHtml(v.code)}</div>
+            ` : `
+              <div class="v-member">U: <strong style="color:#0369a1">${escapeHtml(v.code)}</strong></div>
+              <div class="v-member">P: <strong style="color:#b45309">${escapeHtml(v.password)}</strong></div>
+            `}
+          </div>
+          <div class="v-footer">
+            <span class="v-dns">🌐 ${escapeHtml(hotspotDns)}</span>
+            <span>📞 ${escapeHtml(companyPhone || '-')}</span>
+          </div>
+        </div>
+        `;
+      }).join('')}
+    </div>
+  </div>
+</body>
+</html>`;
+
+    res.send(html);
+  } catch (e) {
+    res.status(500).send('<h3>Error memuat halaman cetak: ' + e.message + '</h3>');
+  }
+});
+
+router.delete('/app/admin/vouchers/batch/:id', requireAdminApiAuth, async (req, res) => {
+  try {
+    const batchId = Number(req.params.id);
+    const batch = db.prepare('SELECT * FROM voucher_batches WHERE id = ?').get(batchId);
+    if (!batch) return res.status(404).json({ success: false, message: 'Batch tidak ditemukan' });
+
+    const vouchers = db.prepare('SELECT code FROM vouchers WHERE batch_id = ?').all(batchId) || [];
+    for (const v of vouchers) {
+      try {
+        const u = await mikrotikService.getHotspotUserByName(v.code, batch.router_id);
+        if (u && u.id) await mikrotikService.deleteHotspotUser(u.id, batch.router_id);
+      } catch (_) {}
+    }
+
+    db.prepare('DELETE FROM vouchers WHERE batch_id = ?').run(batchId);
+    db.prepare('DELETE FROM voucher_batches WHERE id = ?').run(batchId);
+
+    res.json({ success: true, message: `Batch #${batchId} berhasil dihapus dari sistem & MikroTik.` });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }

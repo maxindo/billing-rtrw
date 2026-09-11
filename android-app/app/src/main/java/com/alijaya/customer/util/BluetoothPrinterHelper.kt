@@ -175,7 +175,8 @@ object BluetoothPrinterHelper {
         voucherPass: String,
         priceFormatted: String,
         validity: String,
-        contact: String
+        contact: String,
+        hotspotDns: String = ""
     ): Result<Boolean> = withContext(Dispatchers.IO) {
         val adapter = BluetoothAdapter.getDefaultAdapter()
             ?: return@withContext Result.failure(Exception("Bluetooth tidak tersedia di HP ini"))
@@ -244,7 +245,11 @@ object BluetoothPrinterHelper {
             }
 
             outputStream.write(createDashedLine(width).toByteArray(charset))
-            outputStream.write("Hubungkan ke WiFi & masukkan kode.\n".toByteArray(charset))
+            if (hotspotDns.isNotEmpty()) {
+                outputStream.write("Login: $hotspotDns\n".toByteArray(charset))
+            } else {
+                outputStream.write("Hubungkan ke WiFi & masukkan kode.\n".toByteArray(charset))
+            }
             if (contact.isNotEmpty()) {
                 outputStream.write("CS/WA: $contact\n".toByteArray(charset))
             }
@@ -258,6 +263,130 @@ object BluetoothPrinterHelper {
             Result.success(true)
         } catch (e: Exception) {
             Log.e(TAG, "Print voucher error: ${e.message}", e)
+            Result.failure(e)
+        } finally {
+            try { outputStream?.close() } catch (_: Exception) {}
+            try { socket?.close() } catch (_: Exception) {}
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    suspend fun printVoucherBatchContinuous(
+        deviceAddress: String,
+        is80mm: Boolean,
+        companyName: String,
+        packageName: String,
+        priceFormatted: String,
+        validity: String,
+        contact: String,
+        hotspotDns: String,
+        vouchers: List<Pair<String, String>>,
+        onProgress: ((current: Int, total: Int) -> Unit)? = null
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+            ?: return@withContext Result.failure(Exception("Bluetooth tidak tersedia di HP ini"))
+
+        if (!adapter.isEnabled) {
+            return@withContext Result.failure(Exception("Bluetooth belum aktif di HP"))
+        }
+
+        var socket: BluetoothSocket? = null
+        var outputStream: OutputStream? = null
+
+        try {
+            val device: BluetoothDevice = adapter.getRemoteDevice(deviceAddress)
+            adapter.cancelDiscovery()
+
+            socket = try {
+                val s = device.createRfcommSocketToServiceRecord(SPP_UUID)
+                s.connect()
+                s
+            } catch (_: Exception) {
+                val m = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
+                val s = m.invoke(device, 1) as BluetoothSocket
+                s.connect()
+                s
+            }
+
+            outputStream = socket.outputStream
+
+            val width = if (is80mm) 48 else 32
+            val charset = Charset.forName("ISO-8859-1")
+
+            // Initialize
+            outputStream.write(ESC_INIT)
+            outputStream.write(ESC_CODEPAGE_USA)
+
+            var printedCount = 0
+            val total = vouchers.size
+
+            for ((index, voucher) in vouchers.withIndex()) {
+                val (code, pass) = voucher
+                val isSame = code == pass
+
+                // Ticket Header
+                outputStream.write(ESC_ALIGN_CENTER)
+                outputStream.write(ESC_BOLD_ON)
+                outputStream.write("$companyName\n".toByteArray(charset))
+                outputStream.write(ESC_BOLD_OFF)
+                outputStream.write("VOUCHER INTERNET HOTSPOT\n".toByteArray(charset))
+                outputStream.write(createDashedLine(width).toByteArray(charset))
+
+                // Package & Price
+                outputStream.write(ESC_BOLD_ON)
+                outputStream.write("$packageName - $priceFormatted\n".toByteArray(charset))
+                outputStream.write("Masa Aktif: $validity\n".toByteArray(charset))
+                outputStream.write(ESC_BOLD_OFF)
+                outputStream.write(createDashedLine(width).toByteArray(charset))
+
+                // Credentials
+                if (isSame) {
+                    outputStream.write("KODE LOGIN VOUCHER:\n".toByteArray(charset))
+                    outputStream.write(ESC_BOLD_ON)
+                    outputStream.write(ESC_FONT_LARGE)
+                    outputStream.write("$code\n".toByteArray(charset))
+                    outputStream.write(ESC_FONT_NORMAL)
+                    outputStream.write(ESC_BOLD_OFF)
+                } else {
+                    outputStream.write(ESC_ALIGN_LEFT)
+                    outputStream.write(ESC_BOLD_ON)
+                    outputStream.write("Username : $code\n".toByteArray(charset))
+                    outputStream.write("Password : $pass\n".toByteArray(charset))
+                    outputStream.write(ESC_BOLD_OFF)
+                    outputStream.write(ESC_ALIGN_CENTER)
+                }
+
+                outputStream.write(createDashedLine(width).toByteArray(charset))
+                if (hotspotDns.isNotEmpty()) {
+                    outputStream.write("Login: $hotspotDns\n".toByteArray(charset))
+                } else {
+                    outputStream.write("Hubungkan ke WiFi & masukkan kode.\n".toByteArray(charset))
+                }
+                if (contact.isNotEmpty()) {
+                    outputStream.write("CS/WA: $contact\n".toByteArray(charset))
+                }
+
+                // Tear line between continuous tickets
+                outputStream.write("- - - - - - - - - - - - - - - -\n".toByteArray(charset))
+                outputStream.write(byteArrayOf(0x0A, 0x0A))
+                outputStream.flush()
+
+                printedCount++
+                onProgress?.invoke(printedCount, total)
+
+                // Brief pause to allow thermal print head to keep up without buffer dropping
+                Thread.sleep(180)
+            }
+
+            // Final feed lines after last ticket
+            outputStream.write(ESC_FEED_LINES)
+            outputStream.write(byteArrayOf(0x0A, 0x0A))
+            outputStream.flush()
+            Thread.sleep(500)
+
+            Result.success(printedCount)
+        } catch (e: Exception) {
+            Log.e(TAG, "Print batch continuous error: ${e.message}", e)
             Result.failure(e)
         } finally {
             try { outputStream?.close() } catch (_: Exception) {}
