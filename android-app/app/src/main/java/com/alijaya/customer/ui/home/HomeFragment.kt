@@ -62,25 +62,17 @@ class HomeFragment : Fragment() {
 
         // Separate action 1: Change SSID Only
         binding.cardChangeSsid.setOnClickListener {
-            if (!isOntTr069Connected) {
-                Toast.makeText(context, "Perangkat belum terhubung ke TR-069. Pengaturan Nama WiFi (SSID) dinonaktifkan.", Toast.LENGTH_LONG).show()
-                return@setOnClickListener
-            }
             showChangeSsidDialog()
         }
 
         // Separate action 2: Change Password Only
         binding.cardChangePassword.setOnClickListener {
-            if (!isOntTr069Connected) {
-                Toast.makeText(context, "Perangkat belum terhubung ke TR-069. Pengaturan Sandi WiFi dinonaktifkan.", Toast.LENGTH_LONG).show()
-                return@setOnClickListener
-            }
             showChangePasswordDialog()
         }
 
         binding.cardRestartModem.setOnClickListener {
             if (!isOntTr069Connected) {
-                Toast.makeText(context, "Perangkat belum terhubung ke TR-069. Fitur Restart Modem dinonaktifkan.", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Modem belum terdeteksi aktif di TR-069 untuk restart langsung.", Toast.LENGTH_LONG).show()
                 return@setOnClickListener
             }
             showRestartModemDialog()

@@ -98,6 +98,12 @@ class TechHomeFragment : Fragment() {
                 .addToBackStack(null).commit()
         }
 
+        binding.btnTechMap.setOnClickListener {
+            parentFragmentManager.beginTransaction()
+                .replace(R.id.fragment_container, com.alijaya.customer.ui.map.NetworkMapFragment())
+                .addToBackStack(null).commit()
+        }
+
         binding.btnTechAttendance.setOnClickListener {
             parentFragmentManager.beginTransaction()
                 .replace(R.id.fragment_container, TechAttendanceFragment())

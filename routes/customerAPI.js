@@ -1462,18 +1462,95 @@ router.get('/app/admin/whatsapp/status', requireAdminApiAuth, async (req, res) =
 });
 
 // ─── ADMIN NATIVE: DIGIFLAZZ STATUS ─────────────────────────────────────────
-router.get('/app/admin/digiflazz/status', requireAdminApiAuth, (req, res) => {
+router.get('/app/admin/digiflazz/status', requireAdminApiAuth, async (req, res) => {
   try {
     const settings = getSettingsWithCache();
     const username = settings.digiflazz_username || '';
     const isActive = settings.digiflazz_enabled === '1' || settings.digiflazz_enabled === 'true';
-    const todayTrx = db.prepare(`
-      SELECT COUNT(*) as c, COALESCE(SUM(price), 0) as total FROM agent_transactions 
-      WHERE type = 'digi_purchase' AND date(created_at) = date('now','localtime')
-    `).get() || {};
+
+    let todayCount = 0;
+    let todayTotal = 0;
+    try {
+      const todayAgent = db.prepare(`
+        SELECT COUNT(*) as c, COALESCE(SUM(amount_sell), 0) as total FROM agent_transactions 
+        WHERE (type = 'pulsa' OR type = 'digi_purchase') AND date(created_at) = date('now','localtime')
+      `).get() || {};
+      const todayStaff = db.prepare(`
+        SELECT COUNT(*) as c, COALESCE(SUM(price), 0) as total FROM digiflazz_staff_transactions 
+        WHERE date(created_at) = date('now','localtime')
+      `).get() || {};
+      todayCount = Number(todayAgent.c || 0) + Number(todayStaff.c || 0);
+      todayTotal = Number(todayAgent.total || 0) + Number(todayStaff.total || 0);
+    } catch (dbErr) {
+      logger.warn('[Digiflazz Status] Count query note: ' + dbErr.message);
+    }
+
+    let saldo = 0;
+    if (isActive && username) {
+      try {
+        const bal = await agentSvc.digiflazzCheckBalance();
+        saldo = Number(bal?.deposit || 0);
+      } catch (balErr) {
+        logger.warn('[Digiflazz Status] Cek saldo note: ' + balErr.message);
+      }
+    }
+
     res.json({
       success: true,
-      data: { enabled: isActive, username, todayCount: todayTrx.c || 0, todayTotal: Number(todayTrx.total || 0) }
+      data: {
+        enabled: isActive,
+        username,
+        saldo,
+        todayCount,
+        todayTotal
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ─── ADMIN & TECH NATIVE: PETA / MAPPING ONU & ODP PELANGGAN ────────────────
+router.get('/app/map', (req, res) => {
+  try {
+    const token = extractToken(req);
+    const payload = verifyApiToken(token);
+    if (!payload || (payload.role !== 'admin' && payload.role !== 'tech' && payload.role !== 'cashier' && payload.role !== 'root')) {
+      return res.status(401).send(`
+        <!DOCTYPE html><html><head><meta charset="utf-8"><title>Akses Ditolak</title>
+        <style>body{background:#0f172a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:20px;text-align:center;}</style>
+        </head><body><div><h2>🔒 Autentikasi Diperlukan</h2><p>Sesi login tidak valid atau telah kedaluwarsa. Silakan buka kembali dari aplikasi.</p></div></body></html>
+      `);
+    }
+
+    const odpSvc = require('../services/odpService');
+    const customers = customerSvc.getAllCustomers();
+    const odps = odpSvc.getAllOdps();
+    const settings = getSettingsWithCache();
+    const company = settings.company_header || settings.company_name || 'ISP NETWORK';
+
+    res.render('admin/map_mobile', {
+      title: 'Peta / Mapping ONU Pelanggan',
+      company,
+      customers: customers || [],
+      odps: odps || [],
+      settings: settings || {},
+      token
+    });
+  } catch (e) {
+    res.status(500).send('<h3>Error memuat peta: ' + e.message + '</h3>');
+  }
+});
+
+router.get('/app/map/data', requireTechApiAuth, (req, res) => {
+  try {
+    const odpSvc = require('../services/odpService');
+    const customers = customerSvc.getAllCustomers();
+    const odps = odpSvc.getAllOdps();
+    res.json({
+      success: true,
+      customers: customers || [],
+      odps: odps || []
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
@@ -2907,19 +2984,20 @@ router.post('/tickets/create', requireCustomerApiAuth, async (req, res) => {
 });
 
 // ─── 8. API TEKNISI (Tech App) ──────────────────────────────────────────────
-// Auth middleware untuk teknisi via token
+// Auth middleware untuk teknisi via token (juga mengizinkan admin/cashier/root untuk modul jaringan & TR-069)
 function requireTechApiAuth(req, res, next) {
   try {
-    const auth = req.headers.authorization || '';
-    const token = auth.replace('Bearer ', '').trim();
+    const auth = extractToken(req);
+    const token = String(auth || '').replace(/^Bearer\s+/i, '').trim();
     if (!token) return res.status(401).json({ success: false, message: 'Token tidak ada' });
-    const [body, sig] = token.split('.');
-    const secret = getApiSecret();
-    const expectedSig = b64urlEncode(crypto.createHmac('sha256', secret).update(body).digest());
-    if (sig !== expectedSig) return res.status(401).json({ success: false, message: 'Token tidak valid' });
-    const payload = JSON.parse(b64urlDecodeToString(body));
-    if (payload.role !== 'tech') return res.status(403).json({ success: false, message: 'Bukan teknisi' });
+    const payload = verifyApiToken(token);
+    if (!payload) return res.status(401).json({ success: false, message: 'Token tidak valid' });
+    if (payload.role !== 'tech' && payload.role !== 'admin' && payload.role !== 'cashier' && payload.role !== 'root') {
+      return res.status(403).json({ success: false, message: 'Akses ditolak: Hanya Teknisi atau Admin' });
+    }
     req.tech = payload;
+    req.admin = payload;
+    req.user = payload;
     next();
   } catch (e) {
     return res.status(401).json({ success: false, message: 'Auth error: ' + e.message });

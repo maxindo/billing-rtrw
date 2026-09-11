@@ -71,6 +71,7 @@ class AdminHomeFragment : Fragment() {
         binding.btnMenuOdp.setOnClickListener { openFragment(com.alijaya.customer.ui.tech.TechOdpFragment()) }
         binding.btnActionTr069.setOnClickListener { openFragment(com.alijaya.customer.ui.tech.TechTr069Fragment()) }
         binding.btnMenuVouchers.setOnClickListener { openFragment(AdminVouchersFragment()) }
+        binding.btnMenuMap.setOnClickListener { openFragment(com.alijaya.customer.ui.map.NetworkMapFragment()) }
 
         // Kategori 3: Keuangan & Kas
         binding.btnMenuReports.setOnClickListener { openFragment(AdminReportsFragment()) }

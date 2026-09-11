@@ -91,10 +91,11 @@ class AdminDigiflazzFragment : Fragment() {
                     val data = json.optJSONObject("data") ?: JSONObject()
                     val enabled = data.optBoolean("enabled", false)
                     val username = data.optString("username", "-")
+                    val saldo = data.optDouble("saldo", 0.0)
                     val todayCount = data.optInt("todayCount", 0)
                     val todayTotal = data.optDouble("todayTotal", 0.0)
 
-                    renderUI(enabled, username, todayCount, todayTotal)
+                    renderUI(enabled, username, saldo, todayCount, todayTotal)
                     return@launch
                 } catch (_: Exception) {}
             }
@@ -103,7 +104,7 @@ class AdminDigiflazzFragment : Fragment() {
         }
     }
 
-    private fun renderUI(enabled: Boolean, username: String, todayCount: Int, todayTotal: Double) {
+    private fun renderUI(enabled: Boolean, username: String, saldo: Double, todayCount: Int, todayTotal: Double) {
         val ctx = context ?: return
         val container = binding.contentContainer
         container.removeAllViews()
@@ -212,8 +213,20 @@ class AdminDigiflazzFragment : Fragment() {
         }
         statusLayout.addView(divider)
         statusLayout.addView(createInfoRow("Username Digiflazz", if (username.isNotEmpty()) username else "-", colorAccent))
+        statusLayout.addView(createInfoRow("Saldo Deposit", fmt.format(saldo), colorGreen))
         statusLayout.addView(createInfoRow("Protokol API", "REST JSON / v1 H2H", colorWhite))
         statusLayout.addView(createInfoRow("Status Layanan", if (enabled) "Siap Melayani Transaksi" else "Kunci API Belum Dikonfigurasi", if (enabled) colorGreen else colorYellow))
+
+        val btnCheckSaldo = Button(ctx, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = "🔄 Cek Saldo Terkini"
+            setTextColor(colorAccent)
+            textSize = 12f
+            setOnClickListener {
+                android.widget.Toast.makeText(ctx, "Mengecek status & saldo ke server...", android.widget.Toast.LENGTH_SHORT).show()
+                loadStatus()
+            }
+        }
+        statusLayout.addView(btnCheckSaldo)
 
         statusCard.addView(statusLayout)
         container.addView(statusCard)

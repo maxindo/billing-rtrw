@@ -49,6 +49,8 @@ class TechTr069Fragment : Fragment() {
         return if (base.endsWith("/")) base.dropLast(1) else base
     }
 
+    private fun getToken(): String = CustomerApplication.sessionManager.getAuthToken()
+
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
     ): View {
@@ -67,6 +69,13 @@ class TechTr069Fragment : Fragment() {
 
         binding.rvOnus.layoutManager = LinearLayoutManager(requireContext())
         binding.rvOnus.adapter = adapter
+
+        binding.btnOpenOnuMap.setOnClickListener {
+            parentFragmentManager.beginTransaction()
+                .replace(R.id.fragment_container, com.alijaya.customer.ui.map.NetworkMapFragment())
+                .addToBackStack(null)
+                .commit()
+        }
 
         binding.swipeRefresh.setOnRefreshListener {
             loadTr069Devices()
@@ -88,7 +97,10 @@ class TechTr069Fragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val url = "${getBaseUrl()}/api/customer/app/tech/tr069/devices"
-                val req = Request.Builder().url(url).build()
+                val req = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer ${getToken()}")
+                    .build()
                 val resp = httpClient().newCall(req).execute()
                 val body = resp.body?.string() ?: ""
                 val json = JSONObject(body)
@@ -181,7 +193,11 @@ class TechTr069Fragment : Fragment() {
                     put("ssid", newSsid)
                 }
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url(url).post(body).build()
+                val req = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer ${getToken()}")
+                    .post(body)
+                    .build()
                 val resp = httpClient().newCall(req).execute()
                 val resJson = JSONObject(resp.body?.string() ?: "")
 
@@ -242,7 +258,11 @@ class TechTr069Fragment : Fragment() {
                     put("password", newPass)
                 }
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url(url).post(body).build()
+                val req = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer ${getToken()}")
+                    .post(body)
+                    .build()
                 val resp = httpClient().newCall(req).execute()
                 val resJson = JSONObject(resp.body?.string() ?: "")
 
@@ -279,7 +299,11 @@ class TechTr069Fragment : Fragment() {
                 val url = "${getBaseUrl()}/api/customer/app/tech/tr069/device/reboot"
                 val payload = JSONObject().apply { put("tag", tag) }
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url(url).post(body).build()
+                val req = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer ${getToken()}")
+                    .post(body)
+                    .build()
                 val resp = httpClient().newCall(req).execute()
                 val resJson = JSONObject(resp.body?.string() ?: "")
 

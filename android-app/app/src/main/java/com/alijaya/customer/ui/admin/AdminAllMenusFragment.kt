@@ -39,6 +39,7 @@ class AdminAllMenusFragment : Fragment() {
         MenuItem("📡 OLT PON", "JARINGAN", "#0F766E") { TechOltFragment() },
         MenuItem("🗃️ ODP Lapangan", "JARINGAN", "#155E75") { TechOdpFragment() },
         MenuItem("📡 Remote TR-069", "JARINGAN", "#0284C7") { TechTr069Fragment() },
+        MenuItem("🗺️ Peta / Mapping ONU", "JARINGAN", "#0D9488") { com.alijaya.customer.ui.map.NetworkMapFragment() },
         MenuItem("🎟️ Voucher Hotspot", "JARINGAN", "#059669") { AdminVouchersFragment() },
 
         // Keuangan

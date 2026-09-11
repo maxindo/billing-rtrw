@@ -558,6 +558,23 @@
                     android:textStyle="bold" />
             </LinearLayout>
 
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal">
+                <Button
+                    android:id="@+id/btn_menu_map"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:backgroundTint="#0D9488"
+                    app:cornerRadius="12dp"
+                    android:text="🗺️ Peta / Mapping ONU &amp; ODP"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
             <!-- KATEGORI 3: KEUANGAN & KAS -->
             <TextView
                 android:layout_width="match_parent"
